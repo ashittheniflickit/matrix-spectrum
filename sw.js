@@ -1,1 +1,27 @@
-const CACHE='matrix-spectrum-v5-1';self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(['./','./index.html','./manifest.webmanifest','./icon.png','./icon-512.png'])));self.skipWaiting()});self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))));self.clients.claim()});self.addEventListener('fetch',e=>{if(e.request.method==='GET')e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)))});
+// v10: online changes win, offline mode remains available.
+const CACHE='matrix-spectrum-v10-20261112';
+const ASSETS=['./','./index.html','./manifest.webmanifest','./icon.png','./icon-512.png'];
+self.addEventListener('install',e=>{
+ e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)));
+ self.skipWaiting();
+});
+self.addEventListener('activate',e=>{
+ e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('matrix-spectrum-')&&k!==CACHE).map(k=>caches.delete(k)))));
+ self.clients.claim();
+});
+self.addEventListener('fetch',e=>{
+ const req=e.request,url=new URL(req.url);
+ if(req.method!=='GET'||url.origin!==self.location.origin||!url.href.startsWith(self.registration.scope))return;
+ e.respondWith((async()=>{
+  try{
+   const response=await fetch(req,req.mode==='navigate'?{cache:'no-store'}:undefined);
+   if(response.ok){const cache=await caches.open(CACHE);cache.put(req,response.clone()).catch(()=>{})}
+   return response;
+  }catch(err){
+   const cached=await caches.match(req);
+   if(cached)return cached;
+   if(req.mode==='navigate'){const cachedIndex=await caches.match(new URL('./index.html',self.registration.scope).href);if(cachedIndex)return cachedIndex}
+   throw err;
+  }
+ })());
+});

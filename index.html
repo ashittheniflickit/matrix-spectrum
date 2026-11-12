@@ -1,16 +1,65 @@
-<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)"><meta name="theme-color" content="#000000" media="(prefers-color-scheme: light)"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><link rel="manifest" href="manifest.webmanifest"><title>Matrix Spectrum v9</title><style>
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)"><meta name="theme-color" content="#000000" media="(prefers-color-scheme: light)"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><link rel="manifest" href="manifest.webmanifest"><title>Matrix Spectrum v10</title><style>
 :root{color-scheme:dark;background:#000000}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000000;color:#a3ffb8;font-family:monospace}canvas{display:block;width:100%;height:100%;touch-action:manipulation}#panel{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;align-items:center;gap:9px;flex-wrap:wrap;justify-content:center;width:max-content;max-width:96vw;background:#07110df2;border:1px solid #25563a;border-radius:12px;padding:10px;transition:opacity .35s}button{font:13px monospace;background:#123622;color:#c2ffd3;border:1px solid #397d50;border-radius:7px;padding:10px;cursor:pointer}#status{font-size:12px;max-width:310px;overflow-wrap:anywhere;color:#8fcca2}#hint{position:fixed;top:12px;right:12px;color:#42664b;font:11px monospace;pointer-events:none}body.hidden #panel{opacity:0;pointer-events:none}body.hidden #hint{opacity:0}@media(max-width:600px){#panel{width:94vw}}
-</style></head><body><canvas id="screen"></canvas><div id="hint">Коснись экрана — управление</div><div id="panel"><button id="mic">🎙 Микрофон</button><button id="demo">Демо: ВКЛ</button><button id="full">⛶ На весь экран</button><span id="status">Демо. Для микрофона нужен HTTPS.</span></div><script>
-'use strict';
-const c=document.getElementById('screen'),ctx=c.getContext('2d',{alpha:false}),mic=document.getElementById('mic'),demoBtn=document.getElementById('demo'),full=document.getElementById('full'),status=document.getElementById('status');
+</style></head><body><canvas id="screen"></canvas><div id="hint">Коснись экрана — управление</div><div id="panel"><button id="mic">🎙 Микрофон</button><button id="demo">Демо: ВКЛ</button><button id="full">⛶ На весь экран</button><button id="cal">◌ Калибровка тишины</button><button id="reset" style="display:none">↺ Сброс профиля</button><span id="status">Демо. Для микрофона нужен HTTPS.</span></div><script>
+ 'use strict';
+const c=document.getElementById('screen'),ctx=c.getContext('2d',{alpha:false}),mic=document.getElementById('mic'),demoBtn=document.getElementById('demo'),full=document.getElementById('full'),status=document.getElementById('status'),calBtn=document.getElementById('cal'),resetBtn=document.getElementById('reset');
 let W=0,H=0,C=0,R=0,cw=0,ch=0,history=[],demo=true,analyser=null,data=null,audio=null,stream=null,last=0,acc=0,simTime=0,hideTimer=null;
+// Keep the familiar v9 scale, density and scroll rate.
 const PERIOD=64,MINHZ=40,MAXHZ=12000;
-let prevLevels=new Float32Array(0),floorLevels=new Float32Array(0),glyphs=[];
-let rawLevels=new Float32Array(0),blendedLevels=new Float32Array(0);
-// A separate, low-resolution light field: digits retain exactly the v5 palette.
+const NOISE_KEY='matrix-spectrum-v10-noise-profile';
+const GATE_MARGIN_DB=8,LEVEL_RANGE_DB=48,UNCALIBRATED_CAP_DB=-83;
+const GLOW_STRENGTH=.34;
 const glowCanvas=document.createElement('canvas'),glowCtx=glowCanvas.getContext('2d');
-let glowImage=null,glowPixels=null,glowDirty=true;
-const GLOW_STRENGTH=.34; // adjust only the ambient light, never digit colors
+const digitCanvas=document.createElement('canvas'),digitCtx=digitCanvas.getContext('2d',{alpha:true});
+let glowImage=null,glowPixels=null,glowDirty=true,digitsDirty=true,glyphs=[];
+let filterbank=[],powerData=new Float32Array(0),bandPower=new Float32Array(0),smoothedPower=new Float32Array(0),bandDb=new Float32Array(0);
+let noiseFloorDb=new Float32Array(0),floorCapDb=new Float32Array(0),measuredLevels=new Float32Array(0),visualLevels=new Float32Array(0),prevLevels=new Float32Array(0),slowAvg=new Float32Array(0);
+let noiseProfile=null,calibFrames=null,calibTicks=0,firstAudioAt=null;
+function clamp(x,a,b){return Math.min(b,Math.max(a,x))}
+function smoothstep(a,b,x){const t=clamp((x-a)/(b-a),0,1);return t*t*(3-2*t)}
+function readNoiseProfile(){try{const p=JSON.parse(localStorage.getItem(NOISE_KEY));return p&&p.version===1&&Array.isArray(p.db)&&p.db.length>=10&&p.db.every(Number.isFinite)?p:null}catch(e){return null}}
+noiseProfile=readNoiseProfile();
+function updateCalUI(){resetBtn.style.display=noiseProfile?'inline-block':'none';calBtn.disabled=!analyser||!!calibFrames}
+function buildFilterbank(){
+ filterbank=[];
+ if(!analyser||!audio||!C)return;
+ const binHz=audio.sampleRate/analyser.fftSize,bins=analyser.frequencyBinCount,max=Math.min(MAXHZ,audio.sampleRate*.47);
+ const edge=i=>MINHZ*Math.pow(max/MINHZ,i/C);
+ for(let x=0;x<C;x++){
+  const lo=edge(x),hi=edge(x+1),fc=Math.sqrt(lo*hi),nativeWidth=hi-lo,half=Math.max(nativeWidth,1.5*binHz);
+  // Sum weighted LINEAR power, not the biggest dB bin. At the bottom, where
+  // several visual cells share a physical FFT bin, avoid triple-counting the
+  // minimum-width filters' energy by scaling to the intended log-band width.
+  const norm=Math.min(1,nativeWidth/half),idx=[],weight=[];
+  const k0=Math.max(1,Math.floor((fc-half)/binHz)),k1=Math.min(bins-1,Math.ceil((fc+half)/binHz));
+  for(let k=k0;k<=k1;k++){
+   const w=norm*(1-Math.abs(k*binHz-fc)/half);
+   if(w>0){idx.push(k);weight.push(w)}
+  }
+  filterbank.push({idx,weight});
+ }
+ powerData=new Float32Array(bins);
+}
+function profileAt(x){
+ if(!noiseProfile)return null;
+ const p=noiseProfile.db,f=(x+.5)/C*p.length-.5,lo=clamp(Math.floor(f),0,p.length-1),hi=clamp(lo+1,0,p.length-1);
+ return p[lo]*(1-clamp(f-lo,0,1))+p[hi]*clamp(f-lo,0,1);
+}
+function resetAudioState(){
+ noiseFloorDb=new Float32Array(C);floorCapDb=new Float32Array(C);
+ measuredLevels=new Float32Array(C);visualLevels=new Float32Array(C);
+ prevLevels=new Float32Array(C);slowAvg=new Float32Array(C);
+ bandPower=new Float32Array(C);smoothedPower=new Float32Array(C);bandDb=new Float32Array(C);
+ for(let x=0;x<C;x++){
+  const p=profileAt(x);
+  // The conservative default cap avoids learning an already-playing song as
+  // the noise floor. A calibrated, persistent room profile overrides it.
+  floorCapDb[x]=p===null?UNCALIBRATED_CAP_DB:p+6;
+  noiseFloorDb[x]=p===null?UNCALIBRATED_CAP_DB:p+3;
+ }
+ firstAudioAt=null;
+ if(calibFrames){calibFrames=null;calibTicks=0;calBtn.disabled=false}
+}
 
 function makeGlyphs(){
  glyphs=[];
@@ -31,53 +80,135 @@ function makeGlyphs(){
   glyphs.push(tile);
  }
 }
+
 function showControls(){document.body.classList.remove('hidden');clearTimeout(hideTimer);hideTimer=setTimeout(()=>document.body.classList.add('hidden'),6500)}
 c.addEventListener('click',showControls);
-function resize(){W=innerWidth;H=innerHeight;const d=Math.min(devicePixelRatio||1,1.5);c.width=Math.round(W*d);c.height=Math.round(H*d);ctx.setTransform(d,0,0,d,0,0);cw=Math.max(9,Math.min(18,Math.round(W/88)));ch=Math.round(cw*1.36);const old=history,oldC=C;C=Math.ceil(W/cw);R=Math.ceil(H/ch)+2;history=old.slice(0,R).map(row=>Array.from({length:C},(_,i)=>row[Math.min(oldC-1,Math.floor(i*oldC/C))]||0));while(history.length<R)history.push(new Uint8Array(C));prevLevels=new Float32Array(C);floorLevels=new Float32Array(C);rawLevels=new Float32Array(C);blendedLevels=new Float32Array(C);makeGlyphs();glowCanvas.width=C;glowCanvas.height=R;glowImage=glowCtx.createImageData(C,R);glowPixels=glowImage.data;glowDirty=true;ctx.font=`${Math.round(cw*.91)}px monospace`;ctx.textAlign='center';ctx.textBaseline='middle'}
+function resize(){
+ W=innerWidth;H=innerHeight;
+ const d=Math.min(devicePixelRatio||1,1.5);
+ c.width=Math.round(W*d);c.height=Math.round(H*d);ctx.setTransform(d,0,0,d,0,0);
+ cw=Math.max(9,Math.min(18,Math.round(W/88)));ch=Math.round(cw*1.36);
+ const old=history,oldC=C;
+ C=Math.ceil(W/cw);R=Math.ceil(H/ch)+2;
+ history=old.slice(0,R).map(r=>Uint8Array.from({length:C},(_,i)=>oldC?r[Math.min(oldC-1,Math.floor(i*oldC/C))]||0:0));
+ while(history.length<R)history.push(new Uint8Array(C));
+ makeGlyphs();
+ glowCanvas.width=C;glowCanvas.height=R;
+ glowImage=glowCtx.createImageData(C,R);glowPixels=glowImage.data;
+ digitCanvas.width=Math.round(C*cw*d);digitCanvas.height=Math.round(R*ch*d);digitCtx.setTransform(d,0,0,d,0,0);
+ // A resize changes the frequency grid: rebuild the filterbank, noise model,
+ // and optional calibration interpolation before sampling another row.
+ buildFilterbank();resetAudioState();
+ glowDirty=true;digitsDirty=true;
+}
 addEventListener('resize',resize);resize();
-function sample(){const row=new Uint8Array(C);
+function measureBands(){
+ analyser.getFloatFrequencyData(data);
+ for(let k=1;k<data.length;k++){
+  const db=Number.isFinite(data[k])?Math.max(-120,data[k]):-120;
+  powerData[k]=Math.pow(10,db/10);
+ }
+ // Measurement layer: triangular, overlapping band powers.
+ for(let x=0;x<C;x++){
+  const f=filterbank[x];let energy=0;
+  for(let i=0;i<f.idx.length;i++)energy+=powerData[f.idx[i]]*f.weight[i];
+  bandPower[x]=energy;
+ }
+ // Light blending of un-gated power bridges FFT-bin gaps while retaining
+ // local peaks. All parameters vary continuously across the bass transition.
+ for(let x=0;x<C;x++){
+  const q=x/C,bass=1-smoothstep(.20,.40,q),sigma=1.0+1.0*bass;
+  const radius=Math.ceil(2.5*sigma);let total=0,sum=0;
+  for(let dx=-radius;dx<=radius;dx++){
+   const xx=x+dx;if(xx<0||xx>=C)continue;
+   const w=Math.exp(-.5*(dx/sigma)**2);total+=w;sum+=bandPower[xx]*w;
+  }
+  const mix=.12+.26*bass;
+  smoothedPower[x]=bandPower[x]*(1-mix)+(sum/total)*mix;
+  bandDb[x]=10*Math.log10(smoothedPower[x]+1e-12);
+ }
+}
+function finishCalibration(){
+ if(!calibFrames||!calibFrames.length)return;
+ const profile=[];
+ for(let x=0;x<C;x++){
+  const values=calibFrames.map(frame=>frame[x]).sort((a,b)=>a-b);
+  profile[x]=values[Math.floor((values.length-1)*.20)];
+ }
+ noiseProfile={version:1,db:profile,created:new Date().toISOString()};
+ let saved=false;
+ try{localStorage.setItem(NOISE_KEY,JSON.stringify(noiseProfile));saved=true}catch(e){}
+ calibFrames=null;calibTicks=0;
+ // Do not clear the current FFT sample mid-frame: doing so would produce
+ // one artificially bright row at the moment calibration finishes.
+ for(let x=0;x<C;x++){
+  const p=profileAt(x);floorCapDb[x]=p+6;noiseFloorDb[x]=p+3;
+ }
+ updateCalUI();
+ status.textContent=saved?'Калибровка сохранена. Шумовой профиль применяется.':'Шумовой профиль действует до закрытия страницы: сохранение запрещено.';
+ showControls();
+}
+function updateCalibration(){
+ if(!calibFrames)return;
+ calibFrames.push(Float32Array.from(bandDb));
+ calibTicks++;
+ const remaining=Math.max(0,3-calibTicks*PERIOD/1000);
+ status.textContent='Тишина во время калибровки: '+remaining.toFixed(1)+' с';
+ if(calibTicks*PERIOD>=3000)finishCalibration();
+}
+function softKneeDb(delta){
+ // A continuous 6 dB knee prevents abrupt appearance of tiny signals.
+ if(delta<=-3)return 0;
+ if(delta>=3)return delta;
+ return (delta+3)*(delta+3)/12;
+}
+function measureLevels(){
+ // Noise floor is measured separately from the rhythmic signal. Its upward
+ // movement is capped, so long sustained notes do not decay to silence.
+ for(let x=0;x<C;x++){
+  const db=bandDb[x];const old=noiseFloorDb[x];
+  const warmer=firstAudioAt!==null&&performance.now()-firstAudioAt<3000;
+  const rise=warmer?.05:.0015;
+  noiseFloorDb[x]=db<old?old+(db-old)*.25:old+(db-old)*rise;
+  const gate=Math.min(noiseFloorDb[x],floorCapDb[x])+GATE_MARGIN_DB;
+  const rel=softKneeDb(db-gate)/LEVEL_RANGE_DB;
+  const bass=1-smoothstep(.20,.40,x/C);
+  const level=clamp(rel*(1+.17*bass),0,1);
+  const avg=slowAvg[x]=slowAvg[x]*.93+level*.07;
+  // Add a small transient highlight, but never subtract a note's sustain.
+  measuredLevels[x]=clamp(level+.18*Math.max(0,level-avg-.06),0,1);
+ }
+}
+function visualizeLevels(row){
+ // Artistic layer only: an intentionally weak post-gate blur lets adjacent
+ // numbers form soft blocks. It cannot (and should not) erase true harmonics.
+ for(let x=0;x<C;x++){
+  const bass=1-smoothstep(.20,.40,x/C),sigma=1.10+.65*bass;
+  const radius=Math.ceil(2.4*sigma);let total=0,sum=0;
+  for(let dx=-radius;dx<=radius;dx++){
+   const xx=x+dx;if(xx<0||xx>=C)continue;
+   const w=Math.exp(-.5*(dx/sigma)**2);total+=w;sum+=measuredLevels[xx]*w;
+  }
+  const mix=.16+.17*bass;
+  visualLevels[x]=measuredLevels[x]*(1-mix)+sum/total*mix;
+ }
+ for(let x=0;x<C;x++){
+  const target=visualLevels[x];
+  const smooth=prevLevels[x]=target>prevLevels[x]?target*.68+prevLevels[x]*.32:target*.28+prevLevels[x]*.72;
+  row[x]=Math.min(9,Math.round(Math.pow(clamp(smooth,0,1),1.03)*10));
+ }
+}
+function sample(row,elapsedRows=1){
+ row.fill(0);
  if(analyser&&!demo){
-  analyser.getFloatFrequencyData(data);
-  const hz=audio.sampleRate/analyser.fftSize,max=Math.min(MAXHZ,audio.sampleRate*.47);
-  // First measure each logarithmic band with the original v7 noise gate.
-  for(let x=0;x<C;x++){
-   const lo=MINHZ*Math.pow(max/MINHZ,x/C),hi=MINHZ*Math.pow(max/MINHZ,(x+1)/C);
-   let a=Math.max(1,Math.ceil(lo/hz)),b=Math.min(data.length-1,Math.ceil(hi/hz)-1),peak=-120;
-   if(a<=b){for(let k=a;k<=b;k++)peak=Math.max(peak,data[k])}
-   else{let k=Math.min(data.length-1,Math.max(1,Math.round(Math.sqrt(lo*hi)/hz)));peak=data[k]}
-   const level=Math.max(0,Math.min(1,(peak+83)/59));
-   const baseline=floorLevels[x]=floorLevels[x]*.985+level*.015;
-   const threshold=Math.max(.042,baseline*.264); // 20% stronger adaptive noise gate
-   const cleaned=Math.max(0,(level-threshold)/(1-threshold));
-   const transient=Math.max(0,cleaned-baseline*.50);
-   rawLevels[x]=Math.max(0,Math.min(1,transient*(x/C<.29?1.42:1.15)));
-  }
-  // Frequency cohesion: a gentle Gaussian blend joins adjacent peaks without
-  // flattening the true peak or smearing unrelated sounds across the screen.
-  // The blend is slightly wider in the bass region.
-  for(let x=0;x<C;x++){
-   let sum=0,weightSum=0;
-   const bass=x/C<.29;
-   const radius=bass?4:2;
-   const sigma=bass?2.05:1.20;
-   for(let dx=-radius;dx<=radius;dx++){
-    const xx=x+dx;if(xx<0||xx>=C)continue;
-    const w=Math.exp(-.5*(dx/sigma)**2);
-    sum+=rawLevels[xx]*w;weightSum+=w;
-   }
-   const neighborMean=sum/weightSum;
-   const mix=bass?.56:.36;
-   blendedLevels[x]=rawLevels[x]*(1-mix)+neighborMean*mix;
-  }
-  for(let x=0;x<C;x++){
-   const target=blendedLevels[x];
-   const smooth=prevLevels[x]=target>prevLevels[x]?target*.68+prevLevels[x]*.32:target*.28+prevLevels[x]*.72;
-   row[x]=Math.min(9,Math.round(Math.pow(smooth,1.03)*10));
-  }
+  if(firstAudioAt===null)firstAudioAt=performance.now();
+  measureBands();
+  if(calibFrames)updateCalibration();
+  measureLevels();visualizeLevels(row);
   return row;
  }
  if(!demo)return row;
- simTime+=PERIOD/1000;const beat=Math.pow(Math.max(0,Math.sin(simTime*5.1)),14),hat=Math.pow(Math.max(0,Math.sin(simTime*10.2+1)),18);
+ simTime+=PERIOD*elapsedRows/1000;const beat=Math.pow(Math.max(0,Math.sin(simTime*5.1)),14),hat=Math.pow(Math.max(0,Math.sin(simTime*10.2+1)),18);
  for(let x=0;x<C;x++){const q=x/C;const bass=beat*9*Math.exp(-Math.pow((q-.13)/.065,2)),mid=(1+1.4*Math.sin(simTime*2+q*22))*Math.exp(-Math.pow((q-.48)/.13,2)),high=hat*9*Math.exp(-Math.pow((q-.82)/.065,2));row[x]=Math.max(0,Math.min(9,Math.round(bass+mid+high+(Math.random()-.5)*.3)))}return row}
 function drawGlow(){
  // Smooth 2D convolution across neighbouring columns AND rows. Rendering the
@@ -102,33 +233,96 @@ function drawGlow(){
  }
  glowCtx.putImageData(glowImage,0,0);
 }
-function draw(){ctx.fillStyle='#000000';ctx.fillRect(0,0,W,H);
- const offset=acc/PERIOD-1;
- if(glowDirty){drawGlow();glowDirty=false;}
- ctx.save();ctx.globalAlpha=1;ctx.imageSmoothingEnabled=true;
- // The glow is a diffuse background underneath all the original v5 glyphs.
- ctx.drawImage(glowCanvas,0,(offset-.5)*ch,C*cw,R*ch);
- ctx.restore();
+function renderDigits(){
+ // Render all cached digit tiles only once per new 64 ms row, not at 60 fps.
+ // Preserve v9 glyph tiles, per-row fade, and zero visibility exactly.
+ digitCtx.clearRect(0,0,C*cw,R*ch);
  for(let y=0;y<history.length;y++){
-  const yy=(y+offset)*ch;if(yy< -ch||yy>H+ch)continue;
-  const row=history[y],fade=Math.max(.58,1-y/(R+14));
-  for(let x=0;x<C;x++){const v=row[x];ctx.globalAlpha=fade*(v===0?.86:1);ctx.drawImage(glyphs[v],x*cw,yy,cw,ch)}
+  const rr=history[y],fade=Math.max(.58,1-y/(R+14));
+  for(let x=0;x<C;x++){
+   const v=rr[x];digitCtx.globalAlpha=fade*(v===0?.86:1);
+   digitCtx.drawImage(glyphs[v],x*cw,y*ch,cw,ch);
+  }
  }
- ctx.globalAlpha=1;
+ digitCtx.globalAlpha=1;
 }
-function frame(now){if(!last)last=now;acc+=Math.min(180,Math.max(0,now-last));last=now;let n=0;while(acc>=PERIOD&&n++<3){history.unshift(sample());history.length=R;glowDirty=true;acc-=PERIOD}if(acc>=PERIOD)acc%=PERIOD;draw();requestAnimationFrame(frame)}requestAnimationFrame(frame);
-demoBtn.onclick=()=>{demo=!demo;demoBtn.textContent='Демо: '+(demo?'ВКЛ':'ВЫКЛ');status.textContent=demo?'Симуляция звука':analyser?'Микрофон активен':'Тишина — включи микрофон';showControls()};
-mic.onclick=async()=>{showControls();mic.disabled=true;status.textContent='Запрашиваю разрешение…';
- try{if(!window.isSecureContext)throw Error('Открой сайт по HTTPS, а не файл из памяти');if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)throw Error('Браузер не поддерживает микрофон. Попробуй Chrome.');
- if(stream)stream.getTracks().forEach(t=>t.stop());
- stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false},video:false});
- if(audio)await audio.close();audio=new (window.AudioContext||window.webkitAudioContext)();await audio.resume();
- analyser=audio.createAnalyser();analyser.fftSize=8192;analyser.smoothingTimeConstant=.12;analyser.minDecibels=-100;analyser.maxDecibels=-10;audio.createMediaStreamSource(stream).connect(analyser);data=new Float32Array(analyser.frequencyBinCount);
- demo=false;demoBtn.textContent='Демо: ВЫКЛ';mic.textContent='🎙 Микрофон ✓';status.textContent='Микрофон активен. Звук улавливается из комнаты.';
- stream.getAudioTracks()[0].onended=()=>{analyser=null;status.textContent='Микрофон отключён';showControls()}
- }catch(e){status.textContent='Ошибка: '+(e.name==='NotAllowedError'?'Нет разрешения. Разреши микрофон в настройках сайта.':e.message);console.error(e)}
- finally{mic.disabled=false;showControls()}};
-full.onclick=async()=>{try{if(!document.fullscreenElement){if(document.documentElement.requestFullscreen)await document.documentElement.requestFullscreen();else throw Error('В этом браузере полноэкранный режим недоступен')}else await document.exitFullscreen()}catch(e){status.textContent=e.message+' — попробуй «Добавить на главный экран».'}showControls()};
-if('serviceWorker' in navigator&&location.protocol==='https:')navigator.serviceWorker.register('./sw.js').catch(()=>{});
-showControls();
+function draw(){
+ ctx.fillStyle='#000000';ctx.fillRect(0,0,W,H);
+ const offset=acc/PERIOD-1;
+ if(glowDirty){drawGlow();glowDirty=false}
+ if(digitsDirty){renderDigits();digitsDirty=false}
+ ctx.save();ctx.globalAlpha=1;ctx.imageSmoothingEnabled=true;
+ ctx.drawImage(glowCanvas,0,(offset-.5)*ch,C*cw,R*ch);
+ ctx.drawImage(digitCanvas,0,offset*ch,C*cw,R*ch);
+ ctx.restore();
+}
+function frame(now){
+ if(!last)last=now;
+ acc+=Math.min(180,Math.max(0,now-last));last=now;
+ if(acc>=PERIOD){
+  const n=Math.min(3,Math.floor(acc/PERIOD));
+  const recycled=history.pop()||new Uint8Array(C);
+  const row=sample(recycled,n);history.unshift(row);
+  for(let i=1;i<n;i++){
+   const duplicate=history.pop()||new Uint8Array(C);duplicate.set(row);history.unshift(duplicate);
+  }
+  history.length=R;acc-=n*PERIOD;
+  if(acc>=PERIOD)acc%=PERIOD;
+  glowDirty=true;digitsDirty=true;
+ }
+ draw();requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+demoBtn.onclick=()=>{
+ demo=!demo;demoBtn.textContent='Демо: '+(demo?'ВКЛ':'ВЫКЛ');
+ if(demo&&calibFrames){calibFrames=null;calibTicks=0;updateCalUI()}
+ status.textContent=demo?'Симуляция звука':analyser?'Микрофон активен':'Тишина — включи микрофон';showControls();
+};
+function settingsLabel(track){
+ const s=track.getSettings?track.getSettings():{};
+ const b=x=>x===true?'вкл':x===false?'выкл':'не указано';
+ return `EC ${b(s.echoCancellation)}, NS ${b(s.noiseSuppression)}, AGC ${b(s.autoGainControl)}${s.sampleRate?' · '+s.sampleRate+' Гц':''}`;
+}
+mic.onclick=async()=>{
+ showControls();mic.disabled=true;status.textContent='Запрашиваю разрешение…';
+ try{
+  if(!window.isSecureContext)throw Error('Открой сайт по HTTPS, а не файл из памяти');
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)throw Error('Браузер не поддерживает микрофон. Попробуй Chrome.');
+  if(stream)stream.getTracks().forEach(t=>t.stop());
+  stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false},video:false});
+  if(audio)await audio.close();
+  audio=new (window.AudioContext||window.webkitAudioContext)();await audio.resume();
+  analyser=audio.createAnalyser();analyser.fftSize=8192;analyser.smoothingTimeConstant=.12;
+  analyser.minDecibels=-100;analyser.maxDecibels=-10;
+  audio.createMediaStreamSource(stream).connect(analyser);
+  data=new Float32Array(analyser.frequencyBinCount);
+  buildFilterbank();resetAudioState();
+  demo=false;demoBtn.textContent='Демо: ВЫКЛ';mic.textContent='🎙 Микрофон ✓';
+  status.textContent='Микрофон · '+settingsLabel(stream.getAudioTracks()[0])+(noiseProfile?' · профиль шума сохранён':' · без калибровки');
+  stream.getAudioTracks()[0].onended=()=>{analyser=null;updateCalUI();status.textContent='Микрофон отключён';showControls()};
+  updateCalUI();
+ }catch(e){
+  status.textContent='Ошибка: '+(e.name==='NotAllowedError'?'Нет разрешения. Разреши микрофон в настройках сайта.':e.message);
+  console.error(e);
+ }finally{mic.disabled=false;showControls()}
+};
+calBtn.onclick=()=>{
+ if(!analyser||demo){status.textContent='Включи микрофон и выключи демо';showControls();return}
+ calibFrames=[];calibTicks=0;updateCalUI();
+ status.textContent='Начинаю калибровку: обеспечь тишину на 3 секунды';showControls();
+};
+resetBtn.onclick=()=>{
+ try{localStorage.removeItem(NOISE_KEY)}catch(e){}
+ noiseProfile=null;resetAudioState();updateCalUI();
+ status.textContent='Шумовой профиль удалён. Используется стандартный порог.';showControls();
+};
+full.onclick=async()=>{
+ try{if(!document.fullscreenElement){if(document.documentElement.requestFullscreen)await document.documentElement.requestFullscreen();else throw Error('В этом браузере полноэкранный режим недоступен')}else await document.exitFullscreen()}
+ catch(e){status.textContent=e.message+' — попробуй «Добавить на главный экран».'}
+ showControls();
+};
+if('serviceWorker' in navigator&&location.protocol==='https:'){
+ navigator.serviceWorker.register('./sw.js',{updateViaCache:'none'}).then(reg=>reg.update()).catch(()=>{});
+}
+updateCalUI();showControls();
 </script></body></html>

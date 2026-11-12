@@ -1,4 +1,4 @@
-<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)"><meta name="theme-color" content="#000000" media="(prefers-color-scheme: light)"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><link rel="manifest" href="manifest.webmanifest"><title>Matrix Spectrum v7</title><style>
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)"><meta name="theme-color" content="#000000" media="(prefers-color-scheme: light)"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><link rel="manifest" href="manifest.webmanifest"><title>Matrix Spectrum v8</title><style>
 :root{color-scheme:dark;background:#000000}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000000;color:#a3ffb8;font-family:monospace}canvas{display:block;width:100%;height:100%;touch-action:manipulation}#panel{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;align-items:center;gap:9px;flex-wrap:wrap;justify-content:center;width:max-content;max-width:96vw;background:#07110df2;border:1px solid #25563a;border-radius:12px;padding:10px;transition:opacity .35s}button{font:13px monospace;background:#123622;color:#c2ffd3;border:1px solid #397d50;border-radius:7px;padding:10px;cursor:pointer}#status{font-size:12px;max-width:310px;overflow-wrap:anywhere;color:#8fcca2}#hint{position:fixed;top:12px;right:12px;color:#42664b;font:11px monospace;pointer-events:none}body.hidden #panel{opacity:0;pointer-events:none}body.hidden #hint{opacity:0}@media(max-width:600px){#panel{width:94vw}}
 </style></head><body><canvas id="screen"></canvas><div id="hint">Коснись экрана — управление</div><div id="panel"><button id="mic">🎙 Микрофон</button><button id="demo">Демо: ВКЛ</button><button id="full">⛶ На весь экран</button><span id="status">Демо. Для микрофона нужен HTTPS.</span></div><script>
 'use strict';
@@ -6,6 +6,7 @@ const c=document.getElementById('screen'),ctx=c.getContext('2d',{alpha:false}),m
 let W=0,H=0,C=0,R=0,cw=0,ch=0,history=[],demo=true,analyser=null,data=null,audio=null,stream=null,last=0,acc=0,simTime=0,hideTimer=null;
 const PERIOD=64,MINHZ=40,MAXHZ=12000;
 let prevLevels=new Float32Array(0),floorLevels=new Float32Array(0),glyphs=[];
+let rawLevels=new Float32Array(0),blendedLevels=new Float32Array(0);
 // A separate, low-resolution light field: digits retain exactly the v5 palette.
 const glowCanvas=document.createElement('canvas'),glowCtx=glowCanvas.getContext('2d');
 let glowImage=null,glowPixels=null,glowDirty=true;
@@ -32,30 +33,49 @@ function makeGlyphs(){
 }
 function showControls(){document.body.classList.remove('hidden');clearTimeout(hideTimer);hideTimer=setTimeout(()=>document.body.classList.add('hidden'),6500)}
 c.addEventListener('click',showControls);
-function resize(){W=innerWidth;H=innerHeight;const d=Math.min(devicePixelRatio||1,1.5);c.width=Math.round(W*d);c.height=Math.round(H*d);ctx.setTransform(d,0,0,d,0,0);cw=Math.max(11,Math.min(18,Math.round(W/73)));ch=Math.round(cw*1.36);const old=history,oldC=C;C=Math.ceil(W/cw);R=Math.ceil(H/ch)+2;history=old.slice(0,R).map(row=>Array.from({length:C},(_,i)=>row[Math.min(oldC-1,Math.floor(i*oldC/C))]||0));while(history.length<R)history.push(new Uint8Array(C));prevLevels=new Float32Array(C);floorLevels=new Float32Array(C);makeGlyphs();glowCanvas.width=C;glowCanvas.height=R;glowImage=glowCtx.createImageData(C,R);glowPixels=glowImage.data;glowDirty=true;ctx.font=`${Math.round(cw*.91)}px monospace`;ctx.textAlign='center';ctx.textBaseline='middle'}
+function resize(){W=innerWidth;H=innerHeight;const d=Math.min(devicePixelRatio||1,1.5);c.width=Math.round(W*d);c.height=Math.round(H*d);ctx.setTransform(d,0,0,d,0,0);cw=Math.max(9,Math.min(18,Math.round(W/88)));ch=Math.round(cw*1.36);const old=history,oldC=C;C=Math.ceil(W/cw);R=Math.ceil(H/ch)+2;history=old.slice(0,R).map(row=>Array.from({length:C},(_,i)=>row[Math.min(oldC-1,Math.floor(i*oldC/C))]||0));while(history.length<R)history.push(new Uint8Array(C));prevLevels=new Float32Array(C);floorLevels=new Float32Array(C);rawLevels=new Float32Array(C);blendedLevels=new Float32Array(C);makeGlyphs();glowCanvas.width=C;glowCanvas.height=R;glowImage=glowCtx.createImageData(C,R);glowPixels=glowImage.data;glowDirty=true;ctx.font=`${Math.round(cw*.91)}px monospace`;ctx.textAlign='center';ctx.textBaseline='middle'}
 addEventListener('resize',resize);resize();
 function sample(){const row=new Uint8Array(C);
- if(analyser&&!demo){analyser.getFloatFrequencyData(data);const hz=audio.sampleRate/analyser.fftSize,max=Math.min(MAXHZ,audio.sampleRate*.47);
+ if(analyser&&!demo){
+  analyser.getFloatFrequencyData(data);
+  const hz=audio.sampleRate/analyser.fftSize,max=Math.min(MAXHZ,audio.sampleRate*.47);
+  // First measure each logarithmic band with the original v7 noise gate.
   for(let x=0;x<C;x++){
    const lo=MINHZ*Math.pow(max/MINHZ,x/C),hi=MINHZ*Math.pow(max/MINHZ,(x+1)/C);
    let a=Math.max(1,Math.ceil(lo/hz)),b=Math.min(data.length-1,Math.ceil(hi/hz)-1),peak=-120;
    if(a<=b){for(let k=a;k<=b;k++)peak=Math.max(peak,data[k])}
    else{let k=Math.min(data.length-1,Math.max(1,Math.round(Math.sqrt(lo*hi)/hz)));peak=data[k]}
    const level=Math.max(0,Math.min(1,(peak+83)/59));
-   // Local noise floor reduces constant room hiss and reveals rhythmic transients.
    const baseline=floorLevels[x]=floorLevels[x]*.985+level*.015;
-   // Adaptive soft gate: small signals near the local floor are attenuated,
-    // while sustained notes and strong harmonics survive.
-    const threshold=Math.max(.035,baseline*.22);
-    const cleaned=Math.max(0,(level-threshold)/(1-threshold));
-    const transient=Math.max(0,cleaned-baseline*.50);
-   const boosted=x/C<.29?transient*1.42:transient*1.15;
-   const target=Math.max(0,Math.min(1,boosted));
-   // A brief isolated spike should not dominate a full line of the image.
-    const smooth=prevLevels[x]=target>prevLevels[x]?target*.68+prevLevels[x]*.32:target*.28+prevLevels[x]*.72;
+   const threshold=Math.max(.035,baseline*.22);
+   const cleaned=Math.max(0,(level-threshold)/(1-threshold));
+   const transient=Math.max(0,cleaned-baseline*.50);
+   rawLevels[x]=Math.max(0,Math.min(1,transient*(x/C<.29?1.42:1.15)));
+  }
+  // Frequency cohesion: a gentle Gaussian blend joins adjacent peaks without
+  // flattening the true peak or smearing unrelated sounds across the screen.
+  // The blend is slightly wider in the bass region.
+  for(let x=0;x<C;x++){
+   let sum=0,weightSum=0;
+   const bass=x/C<.29;
+   const radius=bass?3:2;
+   const sigma=bass?1.65:1.05;
+   for(let dx=-radius;dx<=radius;dx++){
+    const xx=x+dx;if(xx<0||xx>=C)continue;
+    const w=Math.exp(-.5*(dx/sigma)**2);
+    sum+=rawLevels[xx]*w;weightSum+=w;
+   }
+   const neighborMean=sum/weightSum;
+   const mix=bass?.42:.30;
+   blendedLevels[x]=rawLevels[x]*(1-mix)+neighborMean*mix;
+  }
+  for(let x=0;x<C;x++){
+   const target=blendedLevels[x];
+   const smooth=prevLevels[x]=target>prevLevels[x]?target*.68+prevLevels[x]*.32:target*.28+prevLevels[x]*.72;
    row[x]=Math.min(9,Math.round(Math.pow(smooth,1.03)*10));
   }
-  return row}
+  return row;
+ }
  if(!demo)return row;
  simTime+=PERIOD/1000;const beat=Math.pow(Math.max(0,Math.sin(simTime*5.1)),14),hat=Math.pow(Math.max(0,Math.sin(simTime*10.2+1)),18);
  for(let x=0;x<C;x++){const q=x/C;const bass=beat*9*Math.exp(-Math.pow((q-.13)/.065,2)),mid=(1+1.4*Math.sin(simTime*2+q*22))*Math.exp(-Math.pow((q-.48)/.13,2)),high=hat*9*Math.exp(-Math.pow((q-.82)/.065,2));row[x]=Math.max(0,Math.min(9,Math.round(bass+mid+high+(Math.random()-.5)*.3)))}return row}

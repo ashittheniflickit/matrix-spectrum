@@ -1,12 +1,51 @@
-<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)"><meta name="theme-color" content="#000000" media="(prefers-color-scheme: light)"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><link rel="manifest" href="manifest.webmanifest"><title>Matrix Spectrum v9.1</title><style>
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)"><meta name="theme-color" content="#000000" media="(prefers-color-scheme: light)"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><link rel="manifest" href="manifest.webmanifest"><title>Matrix Spectrum v9.2</title><style>
 :root{color-scheme:dark;background:#000000}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000000;color:#a3ffb8;font-family:monospace}canvas{display:block;width:100%;height:100%;touch-action:manipulation}#panel{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;align-items:center;gap:9px;flex-wrap:wrap;justify-content:center;width:max-content;max-width:96vw;background:#07110df2;border:1px solid #25563a;border-radius:12px;padding:10px;transition:opacity .35s}button{font:13px monospace;background:#123622;color:#c2ffd3;border:1px solid #397d50;border-radius:7px;padding:10px;cursor:pointer}#status{font-size:12px;max-width:310px;overflow-wrap:anywhere;color:#8fcca2}#hint{position:fixed;top:12px;right:12px;color:#42664b;font:11px monospace;pointer-events:none}body.hidden #panel{opacity:0;pointer-events:none}body.hidden #hint{opacity:0}@media(max-width:600px){#panel{width:94vw}}
-</style></head><body><canvas id="screen"></canvas><div id="hint">Коснись экрана — управление</div><div id="panel"><button id="mic">🎙 Микрофон</button><button id="demo">Демо: ВКЛ</button><button id="full">⛶ На весь экран</button><span id="status">Демо. Для микрофона нужен HTTPS.</span></div><script>
+</style></head><body><canvas id="screen"></canvas><div id="hint">Коснись экрана — управление</div><div id="panel"><button id="mic">🎙 Микрофон</button><button id="demo">Демо: ВКЛ</button><button id="full">⛶ На весь экран</button><button id="cal">◌ Убрать фоновый шум</button><button id="reset" style="display:none">↺ Сброс шума</button><span id="status">Демо. Для микрофона нужен HTTPS.</span></div><script>
 'use strict';
-const c=document.getElementById('screen'),ctx=c.getContext('2d',{alpha:false}),mic=document.getElementById('mic'),demoBtn=document.getElementById('demo'),full=document.getElementById('full'),status=document.getElementById('status');
+const c=document.getElementById('screen'),ctx=c.getContext('2d',{alpha:false}),mic=document.getElementById('mic'),demoBtn=document.getElementById('demo'),full=document.getElementById('full'),status=document.getElementById('status'),calBtn=document.getElementById('cal'),resetBtn=document.getElementById('reset');
 let W=0,H=0,C=0,R=0,cw=0,ch=0,history=[],demo=true,analyser=null,data=null,audio=null,stream=null,last=0,acc=0,simTime=0,hideTimer=null;
 const PERIOD=64,MINHZ=40,MAXHZ=12000;
 let prevLevels=new Float32Array(0),floorLevels=new Float32Array(0),glyphs=[];
 let rawLevels=new Float32Array(0),blendedLevels=new Float32Array(0);
+// Optional room-noise calibration. WITHOUT a saved profile the original v9.1
+// FFT-to-digit algorithm runs unchanged. No new filterbank or analyser.
+const NOISE_KEY='matrix-spectrum-v9-2-room-noise';
+const NOISE_TIME_MS=3000,NOISE_LOW_DB=3,NOISE_HIGH_DB=12;
+let noiseProfile=null,calibration=null,calibrationStart=0;
+function loadNoiseProfile(){
+ try{
+  const p=JSON.parse(localStorage.getItem(NOISE_KEY));
+  return p&&p.version===1&&Array.isArray(p.db)&&p.db.length>=16&&p.db.length<=512&&p.db.every(v=>Number.isFinite(v)&&v>=-150&&v<=20)?p:null;
+ }catch(e){return null}
+}
+noiseProfile=loadNoiseProfile();
+function noiseDbAt(x){
+ // Store the profile on the relative logarithmic axis so it survives resize.
+ const arr=noiseProfile.db,f=(x+.5)*arr.length/C-.5;
+ const a=Math.max(0,Math.min(arr.length-1,Math.floor(f)));
+ const b=Math.min(arr.length-1,a+1),t=Math.max(0,Math.min(1,f-a));
+ return arr[a]*(1-t)+arr[b]*t;
+}
+function updateNoiseButtons(){
+ calBtn.disabled=!analyser||demo||!!calibration;
+ resetBtn.style.display=noiseProfile?'inline-block':'none';
+ resetBtn.disabled=!!calibration;
+}
+function finishCalibration(){
+ if(!calibration||!calibration.length)return;
+ const n=calibration.length,db=[];
+ for(let x=0;x<C;x++){
+  const values=calibration.map(frame=>frame[x]).sort((a,b)=>a-b);
+  // 70th percentile: resistant to occasional quiet gaps, but do the
+  // calibration with ONLY the background fan/PC noise audible.
+  db.push(values[Math.floor((n-1)*.70)]);
+ }
+ noiseProfile={version:1,db};calibration=null;
+ let saved=false;try{localStorage.setItem(NOISE_KEY,JSON.stringify(noiseProfile));saved=true}catch(e){}
+ status.textContent=saved?'Фоновый шум откалиброван и сохранён.':'Шум откалиброван, но браузер не разрешил сохранить профиль.';
+ updateNoiseButtons();showControls();
+}
+
 // A separate, low-resolution light field: digits retain exactly the v5 palette.
 const glowCanvas=document.createElement('canvas'),glowCtx=glowCanvas.getContext('2d');
 let glowImage=null,glowPixels=null,glowDirty=true;
@@ -33,11 +72,12 @@ function makeGlyphs(){
 }
 function showControls(){document.body.classList.remove('hidden');clearTimeout(hideTimer);hideTimer=setTimeout(()=>document.body.classList.add('hidden'),6500)}
 c.addEventListener('click',showControls);
-function resize(){W=innerWidth;H=innerHeight;const d=Math.min(devicePixelRatio||1,1.5);c.width=Math.round(W*d);c.height=Math.round(H*d);ctx.setTransform(d,0,0,d,0,0);cw=Math.max(9,Math.min(18,Math.round(W/88)));ch=Math.round(cw*1.36);const old=history,oldC=C;C=Math.ceil(W/cw);R=Math.ceil(H/ch)+2;history=old.slice(0,R).map(row=>Array.from({length:C},(_,i)=>row[Math.min(oldC-1,Math.floor(i*oldC/C))]||0));while(history.length<R)history.push(new Uint8Array(C));prevLevels=new Float32Array(C);floorLevels=new Float32Array(C);rawLevels=new Float32Array(C);blendedLevels=new Float32Array(C);makeGlyphs();glowCanvas.width=C;glowCanvas.height=R;glowImage=glowCtx.createImageData(C,R);glowPixels=glowImage.data;glowDirty=true;ctx.font=`${Math.round(cw*.91)}px monospace`;ctx.textAlign='center';ctx.textBaseline='middle'}
+function resize(){if(calibration){calibration=null;status.textContent="Калибровка прервана изменением размера экрана";updateNoiseButtons()}W=innerWidth;H=innerHeight;const d=Math.min(devicePixelRatio||1,1.5);c.width=Math.round(W*d);c.height=Math.round(H*d);ctx.setTransform(d,0,0,d,0,0);cw=Math.max(9,Math.min(18,Math.round(W/88)));ch=Math.round(cw*1.36);const old=history,oldC=C;C=Math.ceil(W/cw);R=Math.ceil(H/ch)+2;history=old.slice(0,R).map(row=>Array.from({length:C},(_,i)=>row[Math.min(oldC-1,Math.floor(i*oldC/C))]||0));while(history.length<R)history.push(new Uint8Array(C));prevLevels=new Float32Array(C);floorLevels=new Float32Array(C);rawLevels=new Float32Array(C);blendedLevels=new Float32Array(C);makeGlyphs();glowCanvas.width=C;glowCanvas.height=R;glowImage=glowCtx.createImageData(C,R);glowPixels=glowImage.data;glowDirty=true;ctx.font=`${Math.round(cw*.91)}px monospace`;ctx.textAlign='center';ctx.textBaseline='middle'}
 addEventListener('resize',resize);resize();
 function sample(){const row=new Uint8Array(C);
  if(analyser&&!demo){
   analyser.getFloatFrequencyData(data);
+  if(calibration)calibration.push(new Float32Array(C));
   const hz=audio.sampleRate/analyser.fftSize,max=Math.min(MAXHZ,audio.sampleRate*.47);
   // First measure each logarithmic band with the original v7 noise gate.
   for(let x=0;x<C;x++){
@@ -45,7 +85,16 @@ function sample(){const row=new Uint8Array(C);
    let a=Math.max(1,Math.ceil(lo/hz)),b=Math.min(data.length-1,Math.ceil(hi/hz)-1),peak=-120;
    if(a<=b){for(let k=a;k<=b;k++)peak=Math.max(peak,data[k])}
    else{let k=Math.min(data.length-1,Math.max(1,Math.round(Math.sqrt(lo*hi)/hz)));peak=data[k]}
-   const level=Math.max(0,Math.min(1,(peak+83)/59));
+   // Record the original (unprocessed) dB values while calibrating.
+   if(calibration)calibration[calibration.length-1][x]=peak;
+   let level=Math.max(0,Math.min(1,(peak+83)/59));
+   if(noiseProfile&&!calibration){
+    // Smooth, frequency-specific gate against the calibrated PC/fan noise.
+    // Above the calibrated noise by 12 dB, original v9.1 level is exact.
+    const d=peak-noiseDbAt(x);
+    const t=Math.max(0,Math.min(1,(d-NOISE_LOW_DB)/(NOISE_HIGH_DB-NOISE_LOW_DB)));
+    level*=t*t*(3-2*t);
+   }
    const baseline=floorLevels[x]=floorLevels[x]*.985+level*.015;
    const threshold=Math.max(.042,baseline*.264); // 20% stronger adaptive noise gate
    const cleaned=Math.max(0,(level-threshold)/(1-threshold));
@@ -82,6 +131,11 @@ function sample(){const row=new Uint8Array(C);
    const target=blendedLevels[x];
    const smooth=prevLevels[x]=target>prevLevels[x]?target*.68+prevLevels[x]*.32:target*.28+prevLevels[x]*.72;
    row[x]=Math.min(9,Math.round(Math.pow(smooth,1.03)*10));
+  }
+  if(calibration){
+   const elapsed=performance.now()-calibrationStart;
+   if(elapsed>=NOISE_TIME_MS&&calibration.length>=8)finishCalibration();
+   else status.textContent='Калибровка фона: '+Math.max(0,Math.ceil((NOISE_TIME_MS-elapsed)/1000))+' с. Не включай музыку и не говори.';
   }
   return row;
  }
@@ -139,8 +193,8 @@ function frame(now){
  draw();requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
-demoBtn.onclick=()=>{demo=!demo;demoBtn.textContent='Демо: '+(demo?'ВКЛ':'ВЫКЛ');status.textContent=demo?'Симуляция звука':analyser?'Микрофон активен':'Тишина — включи микрофон';showControls()};
-mic.onclick=async()=>{showControls();mic.disabled=true;status.textContent='Запрашиваю разрешение…';
+demoBtn.onclick=()=>{if(calibration){calibration=null;status.textContent='Калибровка отменена'}demo=!demo;demoBtn.textContent='Демо: '+(demo?'ВКЛ':'ВЫКЛ');status.textContent=demo?'Симуляция звука':analyser?'Микрофон активен'+(noiseProfile?' · шум откалиброван':''):'Тишина — включи микрофон';updateNoiseButtons();showControls()};
+mic.onclick=async()=>{if(calibration)calibration=null;showControls();mic.disabled=true;status.textContent='Запрашиваю разрешение…';
  try{if(!window.isSecureContext)throw Error('Открой сайт по HTTPS, а не файл из памяти');if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)throw Error('Браузер не поддерживает микрофон. Попробуй Chrome.');
  if(stream)stream.getTracks().forEach(t=>t.stop());
  stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false},video:false});
@@ -151,11 +205,24 @@ mic.onclick=async()=>{showControls();mic.disabled=true;status.textContent='За�
  const micSettings=stream.getAudioTracks()[0].getSettings?.()||{};
  const flags=[['EC','echoCancellation'],['NS','noiseSuppression'],['AGC','autoGainControl']]
   .map(([label,key])=>`${label}: ${typeof micSettings[key]==='boolean'?(micSettings[key]?'ВКЛ':'выкл'):'н/д'}`);
- status.textContent+=' '+flags.join(' · ');
+ status.textContent+=' '+flags.join(' · ')+(noiseProfile?' · шум откалиброван':'');
  console.info('Matrix Spectrum v9.1 — microphone getSettings()',micSettings);
- stream.getAudioTracks()[0].onended=()=>{analyser=null;status.textContent='Микрофон отключён';showControls()}
+ stream.getAudioTracks()[0].onended=()=>{analyser=null;calibration=null;status.textContent='Микрофон отключён';updateNoiseButtons();showControls()}
  }catch(e){status.textContent='Ошибка: '+(e.name==='NotAllowedError'?'Нет разрешения. Разреши микрофон в настройках сайта.':e.message);console.error(e)}
- finally{mic.disabled=false;showControls()}};
+ finally{mic.disabled=false;updateNoiseButtons();showControls()}};
+calBtn.onclick=()=>{
+ if(!analyser||demo||calibration)return;
+ calibration=[];calibrationStart=performance.now();
+ status.textContent='Калибровка фона: 3 с. Не включай музыку и не говори.';
+ updateNoiseButtons();showControls();
+};
+resetBtn.onclick=()=>{
+ calibration=null;noiseProfile=null;
+ try{localStorage.removeItem(NOISE_KEY)}catch(e){}
+ status.textContent='Профиль шума сброшен. Работает обычная v9.1.';
+ updateNoiseButtons();showControls();
+};
+updateNoiseButtons();
 full.onclick=async()=>{try{if(!document.fullscreenElement){if(document.documentElement.requestFullscreen)await document.documentElement.requestFullscreen();else throw Error('В этом браузере полноэкранный режим недоступен')}else await document.exitFullscreen()}catch(e){status.textContent=e.message+' — попробуй «Добавить на главный экран».'}showControls()};
 if('serviceWorker' in navigator&&location.protocol==='https:')navigator.serviceWorker.register('./sw.js').catch(()=>{});
 showControls();

@@ -1,5 +1,5 @@
-// v9.1: online changes win, offline mode remains available.
-const CACHE='matrix-spectrum-v9-1-20261112';
+// v9.2: online changes win, offline mode remains available.
+const CACHE='matrix-spectrum-v9-2-noise-20261112';
 const ASSETS=['./','./index.html','./manifest.webmanifest','./icon.png','./icon-512.png'];
 self.addEventListener('install',e=>{
  e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)));

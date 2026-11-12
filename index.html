@@ -1,11 +1,16 @@
-<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)"><meta name="theme-color" content="#000000" media="(prefers-color-scheme: light)"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><link rel="manifest" href="manifest.webmanifest"><title>Matrix Spectrum v6 — Rhythm Focus</title><style>
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)"><meta name="theme-color" content="#000000" media="(prefers-color-scheme: light)"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><link rel="manifest" href="manifest.webmanifest"><title>Matrix Spectrum v7</title><style>
 :root{color-scheme:dark;background:#000000}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000000;color:#a3ffb8;font-family:monospace}canvas{display:block;width:100%;height:100%;touch-action:manipulation}#panel{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;align-items:center;gap:9px;flex-wrap:wrap;justify-content:center;width:max-content;max-width:96vw;background:#07110df2;border:1px solid #25563a;border-radius:12px;padding:10px;transition:opacity .35s}button{font:13px monospace;background:#123622;color:#c2ffd3;border:1px solid #397d50;border-radius:7px;padding:10px;cursor:pointer}#status{font-size:12px;max-width:310px;overflow-wrap:anywhere;color:#8fcca2}#hint{position:fixed;top:12px;right:12px;color:#42664b;font:11px monospace;pointer-events:none}body.hidden #panel{opacity:0;pointer-events:none}body.hidden #hint{opacity:0}@media(max-width:600px){#panel{width:94vw}}
 </style></head><body><canvas id="screen"></canvas><div id="hint">Коснись экрана — управление</div><div id="panel"><button id="mic">🎙 Микрофон</button><button id="demo">Демо: ВКЛ</button><button id="full">⛶ На весь экран</button><span id="status">Демо. Для микрофона нужен HTTPS.</span></div><script>
 'use strict';
 const c=document.getElementById('screen'),ctx=c.getContext('2d',{alpha:false}),mic=document.getElementById('mic'),demoBtn=document.getElementById('demo'),full=document.getElementById('full'),status=document.getElementById('status');
 let W=0,H=0,C=0,R=0,cw=0,ch=0,history=[],demo=true,analyser=null,data=null,audio=null,stream=null,last=0,acc=0,simTime=0,hideTimer=null;
-const PERIOD=52,MINHZ=40,MAXHZ=12000;
-let prevLevels=new Float32Array(0),floorLevels=new Float32Array(0),onsetLevels=new Float32Array(0),glyphs=[];
+const PERIOD=64,MINHZ=40,MAXHZ=12000;
+let prevLevels=new Float32Array(0),floorLevels=new Float32Array(0),glyphs=[];
+// A separate, low-resolution light field: digits retain exactly the v5 palette.
+const glowCanvas=document.createElement('canvas'),glowCtx=glowCanvas.getContext('2d');
+let glowImage=null,glowPixels=null,glowDirty=true;
+const GLOW_STRENGTH=.34; // adjust only the ambient light, never digit colors
+
 function makeGlyphs(){
  glyphs=[];
  const d=Math.min(devicePixelRatio||1,1.5),font=Math.round(cw*.91);
@@ -19,7 +24,7 @@ function makeGlyphs(){
   const ink=`hsl(${137-v*.5} ${saturation}% ${light}%)`;
   if(v>0){
    g.shadowColor=`hsla(136,95%,58%,${(.10+v*.045).toFixed(3)})`;
-   g.shadowBlur=(.8+v*.43)*Math.min(1,cw/14);
+   g.shadowBlur=(.5+v*.30)*Math.min(1,cw/14);
   }
   g.fillStyle=ink;g.fillText(String(v),cw/2,ch/2);
   glyphs.push(tile);
@@ -27,52 +32,71 @@ function makeGlyphs(){
 }
 function showControls(){document.body.classList.remove('hidden');clearTimeout(hideTimer);hideTimer=setTimeout(()=>document.body.classList.add('hidden'),6500)}
 c.addEventListener('click',showControls);
-function resize(){W=innerWidth;H=innerHeight;const d=Math.min(devicePixelRatio||1,1.5);c.width=Math.round(W*d);c.height=Math.round(H*d);ctx.setTransform(d,0,0,d,0,0);cw=Math.max(11,Math.min(18,Math.round(W/73)));ch=Math.round(cw*1.36);const old=history,oldC=C;C=Math.ceil(W/cw);R=Math.ceil(H/ch)+2;history=old.slice(0,R).map(row=>Array.from({length:C},(_,i)=>row[Math.min(oldC-1,Math.floor(i*oldC/C))]||0));while(history.length<R)history.push(new Uint8Array(C));prevLevels=new Float32Array(C);floorLevels=new Float32Array(C);onsetLevels=new Float32Array(C);makeGlyphs();ctx.font=`${Math.round(cw*.91)}px monospace`;ctx.textAlign='center';ctx.textBaseline='middle'}
+function resize(){W=innerWidth;H=innerHeight;const d=Math.min(devicePixelRatio||1,1.5);c.width=Math.round(W*d);c.height=Math.round(H*d);ctx.setTransform(d,0,0,d,0,0);cw=Math.max(11,Math.min(18,Math.round(W/73)));ch=Math.round(cw*1.36);const old=history,oldC=C;C=Math.ceil(W/cw);R=Math.ceil(H/ch)+2;history=old.slice(0,R).map(row=>Array.from({length:C},(_,i)=>row[Math.min(oldC-1,Math.floor(i*oldC/C))]||0));while(history.length<R)history.push(new Uint8Array(C));prevLevels=new Float32Array(C);floorLevels=new Float32Array(C);makeGlyphs();glowCanvas.width=C;glowCanvas.height=R;glowImage=glowCtx.createImageData(C,R);glowPixels=glowImage.data;glowDirty=true;ctx.font=`${Math.round(cw*.91)}px monospace`;ctx.textAlign='center';ctx.textBaseline='middle'}
 addEventListener('resize',resize);resize();
 function sample(){const row=new Uint8Array(C);
-   if(analyser&&!demo){
-   analyser.getFloatFrequencyData(data);
-   const hz=audio.sampleRate/analyser.fftSize,max=Math.min(MAXHZ,audio.sampleRate*.47);
-   const raw=new Float32Array(C);
-   for(let x=0;x<C;x++){
-    const lo=MINHZ*Math.pow(max/MINHZ,x/C),hi=MINHZ*Math.pow(max/MINHZ,(x+1)/C);
-    let a=Math.max(1,Math.ceil(lo/hz)),b=Math.min(data.length-1,Math.ceil(hi/hz)-1),peak=-120;
-    if(a<=b){for(let k=a;k<=b;k++)peak=Math.max(peak,data[k])}
-    else{let k=Math.min(data.length-1,Math.max(1,Math.round(Math.sqrt(lo*hi)/hz)));peak=data[k]}
-    raw[x]=Math.max(0,Math.min(1,(peak+83)/59));
-   }
-   for(let x=0;x<C;x++){
-    const q=x/C,level=raw[x];
-    // Slow baseline retains note trails; a fast attack detector accents rhythmic changes.
-    const baseline=floorLevels[x]=floorLevels[x]*.988+level*.012;
-    const prior=onsetLevels[x];
-    onsetLevels[x]=prior*.77+level*.23;
-    const onset=Math.max(0,level-prior-.035);
-    const transient=Math.max(0,level-baseline*.76);
-    const bass=q<.29;
-    // Keep the original tonal balance. Extra energy only marks the start of notes/beats.
-    const accent=Math.min(.27,onset*(bass?1.10:.53));
-    const target=Math.min(1,transient*(bass?1.38:1.12)+accent);
-    const smooth=prevLevels[x]=target>prevLevels[x]?target*.82+prevLevels[x]*.18:target*.38+prevLevels[x]*.62;
-    // Gentle frequency smoothing joins neighboring note cells without blurring bass hits.
-    const neighbor=(raw[Math.max(0,x-1)]+raw[Math.min(C-1,x+1)])*.5;
-    const continuity=bass?0:.075*Math.max(0,neighbor-baseline);
-    row[x]=Math.min(9,Math.round(Math.pow(Math.min(1,smooth+continuity),1.03)*10));
-   }
-   return row}
-if(!demo)return row;
+ if(analyser&&!demo){analyser.getFloatFrequencyData(data);const hz=audio.sampleRate/analyser.fftSize,max=Math.min(MAXHZ,audio.sampleRate*.47);
+  for(let x=0;x<C;x++){
+   const lo=MINHZ*Math.pow(max/MINHZ,x/C),hi=MINHZ*Math.pow(max/MINHZ,(x+1)/C);
+   let a=Math.max(1,Math.ceil(lo/hz)),b=Math.min(data.length-1,Math.ceil(hi/hz)-1),peak=-120;
+   if(a<=b){for(let k=a;k<=b;k++)peak=Math.max(peak,data[k])}
+   else{let k=Math.min(data.length-1,Math.max(1,Math.round(Math.sqrt(lo*hi)/hz)));peak=data[k]}
+   const level=Math.max(0,Math.min(1,(peak+83)/59));
+   // Local noise floor reduces constant room hiss and reveals rhythmic transients.
+   const baseline=floorLevels[x]=floorLevels[x]*.985+level*.015;
+   // Adaptive soft gate: small signals near the local floor are attenuated,
+    // while sustained notes and strong harmonics survive.
+    const threshold=Math.max(.035,baseline*.22);
+    const cleaned=Math.max(0,(level-threshold)/(1-threshold));
+    const transient=Math.max(0,cleaned-baseline*.50);
+   const boosted=x/C<.29?transient*1.42:transient*1.15;
+   const target=Math.max(0,Math.min(1,boosted));
+   // A brief isolated spike should not dominate a full line of the image.
+    const smooth=prevLevels[x]=target>prevLevels[x]?target*.68+prevLevels[x]*.32:target*.28+prevLevels[x]*.72;
+   row[x]=Math.min(9,Math.round(Math.pow(smooth,1.03)*10));
+  }
+  return row}
+ if(!demo)return row;
  simTime+=PERIOD/1000;const beat=Math.pow(Math.max(0,Math.sin(simTime*5.1)),14),hat=Math.pow(Math.max(0,Math.sin(simTime*10.2+1)),18);
  for(let x=0;x<C;x++){const q=x/C;const bass=beat*9*Math.exp(-Math.pow((q-.13)/.065,2)),mid=(1+1.4*Math.sin(simTime*2+q*22))*Math.exp(-Math.pow((q-.48)/.13,2)),high=hat*9*Math.exp(-Math.pow((q-.82)/.065,2));row[x]=Math.max(0,Math.min(9,Math.round(bass+mid+high+(Math.random()-.5)*.3)))}return row}
+function drawGlow(){
+ // Smooth 2D convolution across neighbouring columns AND rows. Rendering the
+ // tiny light field stretched with browser interpolation avoids costly blur
+ // filters and keeps the edges soft, with no square cell boundaries.
+ const weights=[.09,.23,.36,.23,.09];
+ for(let y=0;y<R;y++)for(let x=0;x<C;x++){
+  let energy=0;
+  for(let dy=-2;dy<=2;dy++){
+   const yy=y+dy;if(yy<0||yy>=R)continue;
+   const row=history[yy];
+   for(let dx=-2;dx<=2;dx++){
+    const xx=x+dx;if(xx<0||xx>=C)continue;
+    const v=row[xx];
+    if(v<3)continue;
+    energy+=weights[dy+2]*weights[dx+2]*Math.pow((v-2)/7,1.65);
+   }
+  }
+  const idx=(y*C+x)*4;
+  const a=Math.min(90,Math.round(energy*255*GLOW_STRENGTH));
+  glowPixels[idx]=18;glowPixels[idx+1]=185;glowPixels[idx+2]=75;glowPixels[idx+3]=a;
+ }
+ glowCtx.putImageData(glowImage,0,0);
+}
 function draw(){ctx.fillStyle='#000000';ctx.fillRect(0,0,W,H);
  const offset=acc/PERIOD-1;
+ if(glowDirty){drawGlow();glowDirty=false;}
+ ctx.save();ctx.globalAlpha=1;ctx.imageSmoothingEnabled=true;
+ // The glow is a diffuse background underneath all the original v5 glyphs.
+ ctx.drawImage(glowCanvas,0,(offset-.5)*ch,C*cw,R*ch);
+ ctx.restore();
  for(let y=0;y<history.length;y++){
   const yy=(y+offset)*ch;if(yy< -ch||yy>H+ch)continue;
-  const row=history[y],fade=Math.max(.58,1-y/(R+14));ctx.globalAlpha=fade;
+  const row=history[y],fade=Math.max(.58,1-y/(R+14));
   for(let x=0;x<C;x++){const v=row[x];ctx.globalAlpha=fade*(v===0?.86:1);ctx.drawImage(glyphs[v],x*cw,yy,cw,ch)}
  }
  ctx.globalAlpha=1;
 }
-function frame(now){if(!last)last=now;acc+=Math.min(180,Math.max(0,now-last));last=now;let n=0;while(acc>=PERIOD&&n++<3){history.unshift(sample());history.length=R;acc-=PERIOD}if(acc>=PERIOD)acc%=PERIOD;draw();requestAnimationFrame(frame)}requestAnimationFrame(frame);
+function frame(now){if(!last)last=now;acc+=Math.min(180,Math.max(0,now-last));last=now;let n=0;while(acc>=PERIOD&&n++<3){history.unshift(sample());history.length=R;glowDirty=true;acc-=PERIOD}if(acc>=PERIOD)acc%=PERIOD;draw();requestAnimationFrame(frame)}requestAnimationFrame(frame);
 demoBtn.onclick=()=>{demo=!demo;demoBtn.textContent='Демо: '+(demo?'ВКЛ':'ВЫКЛ');status.textContent=demo?'Симуляция звука':analyser?'Микрофон активен':'Тишина — включи микрофон';showControls()};
 mic.onclick=async()=>{showControls();mic.disabled=true;status.textContent='Запрашиваю разрешение…';
  try{if(!window.isSecureContext)throw Error('Открой сайт по HTTPS, а не файл из памяти');if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)throw Error('Браузер не поддерживает микрофон. Попробуй Chrome.');

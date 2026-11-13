@@ -182,11 +182,13 @@ function draw(){ctx.fillStyle='#000000';ctx.fillRect(0,0,W,H);
  ctx.globalAlpha=1;
 }
 
-// Spectral Flow is an independent renderer. The Matrix sample(), glyphs,
-// glow and 64 ms scrolling algorithm above remain untouched.
-const FLOW_BANDS=36,FLOW_LINES=11,FLOW_SAMPLE_MS=32;
+// Liquid Ribbons v2: ONLY this renderer is changed. Matrix v9.2 stays intact.
+// One coherent, smooth displacement field for all 11 filaments.
+const FLOW_BANDS=18,FLOW_LINES=11,FLOW_SAMPLE_MS=40;
 const flowTarget=new Float32Array(FLOW_BANDS),flowLevel=new Float32Array(FLOW_BANDS);
 const flowCurve=new Float32Array(128),flowSmooth=new Float32Array(128);
+const FLOW_POINTS=128;
+const flowY=new Float32Array(FLOW_POINTS),flowEnergy=new Float32Array(FLOW_POINTS);
 function flowSpectrum(){
  if(analyser&&!demo){
   analyser.getFloatFrequencyData(data);
@@ -200,7 +202,6 @@ function flowSpectrum(){
    else peak=data[Math.min(data.length-1,Math.max(1,Math.round(Math.sqrt(lo*hi)/binHz)))];
    let level=Math.max(0,Math.min(1,(peak+83)/59));
    if(noiseProfile&&!calibration){
-    // Interpolate the SAME saved room-noise profile along the log axis.
     const f=(i+.5)*noiseProfile.db.length/FLOW_BANDS-.5;
     const a0=Math.max(0,Math.min(noiseProfile.db.length-1,Math.floor(f)));
     const b0=Math.min(noiseProfile.db.length-1,a0+1),t0=Math.max(0,Math.min(1,f-a0));
@@ -208,56 +209,50 @@ function flowSpectrum(){
     const t=Math.max(0,Math.min(1,(peak-noise-NOISE_LOW_DB)/(NOISE_HIGH_DB-NOISE_LOW_DB)));
     level*=t*t*(3-2*t);
    }
-   // A small dead-zone keeps the filaments straight in genuine silence.
-   flowTarget[i]=Math.pow(Math.max(0,(level-.075)/.925),1.12);
+   // A real quiet room or calibrated silence yields a straight ribbon.
+   flowTarget[i]=Math.pow(Math.max(0,(level-.09)/.91),1.03);
   }
  }else if(demo){
-  const beat=Math.pow(Math.max(0,Math.sin(flowTime*5.1)),12);
-  const hat=Math.pow(Math.max(0,Math.sin(flowTime*10.2+1)),16);
+  const beat=Math.pow(Math.max(0,Math.sin(flowTime*4.4)),10);
+  const hat=Math.pow(Math.max(0,Math.sin(flowTime*9.2+1)),14);
   for(let i=0;i<FLOW_BANDS;i++){
-   const q=i/FLOW_BANDS;
-   const bass=beat*.92*Math.exp(-Math.pow((q-.13)/.095,2));
-   const mid=(.32+.18*Math.sin(flowTime*2.3))*Math.exp(-Math.pow((q-.49)/.14,2));
-   const high=hat*.75*Math.exp(-Math.pow((q-.83)/.085,2));
+   const q=(i+.5)/FLOW_BANDS;
+   const bass=beat*.98*Math.exp(-Math.pow((q-.15)/.11,2));
+   const mid=(.30+.22*Math.sin(flowTime*1.8))*Math.exp(-Math.pow((q-.50)/.15,2));
+   const high=hat*.65*Math.exp(-Math.pow((q-.82)/.10,2));
    flowTarget[i]=Math.max(0,Math.min(1,bass+mid+high));
   }
  }else flowTarget.fill(0);
 }
 function flowUpdate(dt){
- const up=1-Math.exp(-dt/0.065),down=1-Math.exp(-dt/0.19);
+ const up=1-Math.exp(-dt/.075),down=1-Math.exp(-dt/.23);
  for(let i=0;i<FLOW_BANDS;i++){
   const t=flowTarget[i],v=flowLevel[i];
   flowLevel[i]=v+(t-v)*(t>v?up:down);
  }
 }
 function flowBuildCurve(){
- // Gaussian blending is only for geometric continuity; it does not alter
- // the original Matrix FFT pipeline. There is no scrolling or history.
- for(let i=0;i<flowCurve.length;i++){
-  const f=i*(FLOW_BANDS-1)/(flowCurve.length-1),center=Math.floor(f);
-  let weighted=0,wsum=0;
-  for(let j=-3;j<=3;j++){
-   const k=center+j;if(k<0||k>=FLOW_BANDS)continue;
-   const distance=(k-f)/1.45,w=Math.exp(-.5*distance*distance);
-   weighted+=flowLevel[k]*w;wsum+=w;
+ // A broad Gaussian kernel removes column-shaped response. Its support is
+ // ~5 bands (instead of many narrow, independent wiggles).
+ for(let i=0;i<FLOW_POINTS;i++){
+  const f=i*(FLOW_BANDS-1)/(FLOW_POINTS-1);
+  let sum=0,wsum=0;
+  for(let k=Math.max(0,Math.floor(f)-5);k<=Math.min(FLOW_BANDS-1,Math.ceil(f)+5);k++){
+   const z=(k-f)/1.75,w=Math.exp(-.5*z*z);
+   sum+=flowLevel[k]*w;wsum+=w;
   }
-  flowCurve[i]=wsum?weighted/wsum:0;
+  flowCurve[i]=wsum?sum/wsum:0;
  }
- // Smooth again spatially, but preserve the relative peaks.
- for(let i=0;i<flowCurve.length;i++){
-  let v=0,w=0;
-  for(let j=-2;j<=2;j++){
-   const k=Math.max(0,Math.min(flowCurve.length-1,i+j));
-   const ww=j===0?4:Math.abs(j)===1?2:1;
-   v+=flowCurve[k]*ww;w+=ww;
+ // Suppress shallow secondary humps without destroying independent strong
+ // instruments: a wide maximum envelope gently merges close responses.
+ for(let i=0;i<FLOW_POINTS;i++){
+  let localMax=0;
+  for(let j=-9;j<=9;j+=3){
+   const k=Math.max(0,Math.min(FLOW_POINTS-1,i+j));
+   if(flowCurve[k]>localMax)localMax=flowCurve[k];
   }
-  flowSmooth[i]=v/w;
+  flowSmooth[i]=.73*flowCurve[i]+.27*localMax;
  }
-}
-function flowAt(q){
- const f=Math.max(0,Math.min(flowSmooth.length-1,q*(flowSmooth.length-1)));
- const a=Math.floor(f),b=Math.min(flowSmooth.length-1,a+1),t=f-a;
- return flowSmooth[a]*(1-t)+flowSmooth[b]*t;
 }
 function drawFlow(){
  ctx.fillStyle='#000000';ctx.fillRect(0,0,W,H);
@@ -270,42 +265,50 @@ function drawFlow(){
   flowGradient.addColorStop(1,'#b0ffe0');
   flowGradientWidth=W;
  }
- // Draw from x=-24 to x=W+24: paths extend offscreen, no cut-off ends.
- const step=Math.max(5,Math.min(11,Math.round(W/115)));
- const minDim=Math.min(H,W);
- const amp=Math.min(H*.20,minDim*.17);
- const spacing=Math.min(13,Math.max(5,H*.012));
- const active=flowLevel.reduce((a,b)=>a+b,0)/FLOW_BANDS;
+ const amp=Math.min(H*.34,W*.235); // ~2x v1 amplitude
+ const spacing=Math.min(8.5,Math.max(3.8,H*.0075));
+ let mean=0;
+ // One common wave: big, slow low-frequency bends; tighter high-frequency
+ // ripples. No per-line phases, so the threads read as one liquid ribbon.
+ for(let i=0;i<FLOW_POINTS;i++){
+  const q=i/(FLOW_POINTS-1),e=flowSmooth[i];
+  flowEnergy[i]=e;mean+=e;
+  const phase=flowTime*(1.35+q*.65);
+  const bass=Math.sin(q*8.2-phase)*.90;
+  const mid=Math.sin(q*16.5+phase*.85)*.27;
+  const high=Math.sin(q*30.0-phase*1.25)*.075;
+  // Envelope vanishes in silence; frequency-specific motion stays localized.
+  flowY[i]=amp*e*(bass+mid+high);
+ }
+ mean/=FLOW_POINTS;
+ const left=-18,right=W+18,step=Math.max(6,Math.min(12,Math.round(W/120)));
+ const center=H*.51;
  ctx.lineCap='round';ctx.lineJoin='round';
+ // One soft, broad ambient halo, drawn only twice (not 11 blurry strokes).
+ function ribbonPath(offset,scale){
+  ctx.beginPath();
+  let first=true;
+  for(let x=left;x<=right+step;x+=step){
+   const q=Math.max(0,Math.min(1,x/W)),f=q*(FLOW_POINTS-1);
+   const k=Math.floor(f),j=Math.min(FLOW_POINTS-1,k+1),t=f-k;
+   const bend=flowY[k]*(1-t)+flowY[j]*t;
+   const energy=flowEnergy[k]*(1-t)+flowEnergy[j]*t;
+   // Small differential breathing is shared, not a separate waveform.
+   const breathing=energy*amp*.018*Math.sin(q*10.5+flowTime*1.1)*offset/5;
+   const y=center+offset*spacing+bend*scale+breathing;
+   if(first){ctx.moveTo(x,y);first=false}else ctx.lineTo(x,y);
+  }
+ }
+ ribbonPath(0,1);ctx.strokeStyle='#1bdc7a';ctx.globalAlpha=.095+Math.min(.10,mean*.26);ctx.lineWidth=35;ctx.stroke();
+ ribbonPath(0,1);ctx.strokeStyle='#37f99b';ctx.globalAlpha=.10+Math.min(.10,mean*.3);ctx.lineWidth=17;ctx.stroke();
+ // Cohesive fine filaments with near-identical trajectories and tight spacing.
  for(let line=0;line<FLOW_LINES;line++){
   const u=(line-(FLOW_LINES-1)/2)/((FLOW_LINES-1)/2);
-  const center=H*.51+u*spacing*5;
-  const points=[];
-  for(let x=-step*3;x<=W+step*3;x+=step){
-   const q=Math.max(0,Math.min(1,x/W));
-   const e=flowAt(q);
-   // Frequency is the horizontal axis. Low notes generate broader bends;
-   // high notes add smaller ripples. In silence e=0 and every line is flat.
-   const phase=flowTime*(1.7+q*2.0)+line*.27;
-   const bass=Math.sin(q*11.0+phase)*.64;
-   const mid=Math.sin(q*25.0-phase*1.16+line*.17)*.25;
-   const treble=Math.sin(q*59.0+phase*1.8-line*.21)*.11;
-   const spread=(1-Math.abs(u)*.26);
-   const shape=(bass+mid+treble)*amp*e*spread;
-   const localPush=amp*.26*e*Math.sin(q*8.5+flowTime*1.05+line*.12);
-   points.push([x,center+shape+localPush]);
-  }
-  ctx.beginPath();ctx.moveTo(points[0][0],points[0][1]);
-  for(let j=1;j<points.length;j++){
-   const prev=points[j-1],cur=points[j];
-   ctx.quadraticCurveTo(prev[0],prev[1],(prev[0]+cur[0])/2,(prev[1]+cur[1])/2);
-  }
-  const end=points[points.length-1];ctx.lineTo(end[0],end[1]);
-  // Soft light with two inexpensive vector strokes, no per-pixel simulation.
-  ctx.strokeStyle='#20db77';ctx.globalAlpha=.075+Math.min(.20,active*.65);
-  ctx.lineWidth=10;ctx.stroke();
-  ctx.strokeStyle=flowGradient;ctx.globalAlpha=.48+Math.min(.47,active*2.0);
-  ctx.lineWidth=line===5?1.8:1.15;ctx.stroke();
+  ribbonPath(u*5,1-u*u*.075);
+  ctx.strokeStyle=flowGradient;
+  ctx.globalAlpha=(line===5?.91:.47)+Math.min(.13,mean*.32);
+  ctx.lineWidth=line===5?1.8:1.0;
+  ctx.stroke();
  }
  ctx.globalAlpha=1;
 }

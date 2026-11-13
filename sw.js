@@ -1,5 +1,5 @@
 // Matrix v9.2 + Spectral Flow v1: online changes win; offline works.
-const CACHE='matrix-spectrum-flow-v1-20261113';
+const CACHE='matrix-spectrum-flow-v2-20261113';
 const ASSETS=['./','./index.html','./manifest.webmanifest','./icon.png','./icon-512.png'];
 self.addEventListener('install',e=>{
  e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)));

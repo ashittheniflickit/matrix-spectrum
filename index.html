@@ -1,10 +1,113 @@
 <!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)"><meta name="theme-color" content="#000000" media="(prefers-color-scheme: light)"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><link rel="manifest" href="manifest.webmanifest"><title>Matrix Spectrum · Spectral Flow</title><style>
-:root{color-scheme:dark;background:#000000}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000000;color:#a3ffb8;font-family:monospace}canvas{display:block;width:100%;height:100%;touch-action:manipulation}#panel{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;align-items:center;gap:9px;flex-wrap:wrap;justify-content:center;width:max-content;max-width:96vw;background:#07110df2;border:1px solid #25563a;border-radius:12px;padding:10px;transition:opacity .35s}button{font:13px monospace;background:#123622;color:#c2ffd3;border:1px solid #397d50;border-radius:7px;padding:10px;cursor:pointer}#status{font-size:12px;max-width:310px;overflow-wrap:anywhere;color:#8fcca2}#hint{position:fixed;top:12px;right:12px;color:#42664b;font:11px monospace;pointer-events:none}body.hidden #panel{opacity:0;pointer-events:none}body.hidden #hint{opacity:0}@media(max-width:600px){#panel{width:94vw}}
-</style></head><body><canvas id="screen"></canvas><div id="hint">Коснись экрана — управление</div><div id="panel"><button id="mode">◈ Режим: Матрица</button><button id="mic">🎙 Микрофон</button><button id="demo">Демо: ВКЛ</button><button id="full">⛶ На весь экран</button><button id="cal">◌ Убрать фоновый шум</button><button id="reset" style="display:none">↺ Сброс шума</button><span id="status">Демо. Для микрофона нужен HTTPS.</span></div><script>
+:root{color-scheme:dark;background:#000000}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000000;color:#a3ffb8;font-family:monospace}canvas{display:block;width:100%;height:100%;touch-action:manipulation}#panel{position:fixed;left:50%;bottom:max(14px,env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;align-items:center;gap:9px;flex-wrap:wrap;justify-content:center;width:max-content;max-width:96vw;background:#07110df2;border:1px solid #25563a;border-radius:12px;padding:10px;transition:opacity .35s}button{font:13px monospace;background:#123622;color:#c2ffd3;border:1px solid #397d50;border-radius:7px;padding:10px;cursor:pointer}#status{font-size:12px;max-width:310px;overflow-wrap:anywhere;color:#8fcca2}#hint{position:fixed;top:12px;right:12px;color:#42664b;font:11px monospace;pointer-events:none}body.hidden #panel{opacity:0;pointer-events:none}body.hidden #hint{opacity:0}
+#settingsOverlay{position:fixed;inset:0;background:#0009;display:none;z-index:5}
+#settingsOverlay.open{display:block}
+#settingsPanel{position:absolute;bottom:max(16px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);width:min(490px,94vw);max-height:min(74vh,750px);overflow-y:auto;overscroll-behavior:contain;background:#08120fed;border:1px solid #38644c;border-radius:15px;padding:16px 17px;color:#bfffd5;box-shadow:0 8px 40px #000b}
+#settingsPanel h2{font-size:17px;margin:0 0 4px}#settingsPanel h3{font-size:13px;margin:15px 0 8px;color:#9dd3ad}
+.settingsHeader{display:flex;align-items:center;justify-content:space-between;gap:12px}.settingItem{margin:12px 0}.settingTitle{display:flex;justify-content:space-between;gap:12px;font-size:13px}.settingItem small{display:block;font:11px/1.45 monospace;color:#8fbba0;margin-top:3px}.settingItem input[type=range]{display:block;width:100%;accent-color:var(--ui-accent,#41e78d);margin:9px 0 0;touch-action:pan-y}
+.settingActions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:15px}#colorPicker{width:55px;height:34px;border:0;background:transparent;cursor:pointer}.colorRow{display:flex;align-items:center;justify-content:space-between;gap:10px}.settingHint{font:11px/1.5 monospace;color:#8fbba0;margin-top:5px}
+#panel button{white-space:nowrap}#settingsOverlay button{padding:8px}@media(max-width:600px){#panel{width:94vw}}
+</style></head><body><canvas id="screen"></canvas><div id="hint">Коснись экрана — управление</div><div id="panel"><button id="mode">◈ Режим: Матрица</button><button id="mic">🎙 Микрофон</button><button id="demo">Демо: ВКЛ</button><button id="full">⛶ На весь экран</button><button id="settingsBtn">⚙ Настройки</button><button id="cal">◌ Убрать фоновый шум</button><button id="reset" style="display:none">↺ Сброс шума</button><span id="status">Демо. Для микрофона нужен HTTPS.</span></div>
+<div id="settingsOverlay"><div id="settingsPanel" role="dialog" aria-modal="true" aria-label="Настройки визуализатора">
+ <div class="settingsHeader"><h2>Настройки</h2><button id="settingsClose" aria-label="Закрыть настройки">✕</button></div>
+ <div class="settingHint">Изменения применяются сразу и сохраняются в этом браузере.</div>
+ <h3 id="modeSettingsTitle">Spectral Flow</h3><div id="modeSettings"></div>
+ <h3>Общий цвет обоих режимов</h3><div class="colorRow"><span class="settingHint">Меняет оттенок, сохраняя контраст, яркость и свечение</span><input id="colorPicker" type="color" value="#36f58a" aria-label="Выбрать основной цвет"></div>
+ <div class="settingActions"><button id="settingsReset">↺ Сбросить параметры режима</button><button id="settingsDone">Готово</button></div>
+ </div></div><script>
 'use strict';
 const c=document.getElementById('screen'),ctx=c.getContext('2d',{alpha:false}),mic=document.getElementById('mic'),demoBtn=document.getElementById('demo'),full=document.getElementById('full'),status=document.getElementById('status'),calBtn=document.getElementById('cal'),resetBtn=document.getElementById('reset'),modeBtn=document.getElementById('mode');
 let W=0,H=0,C=0,R=0,cw=0,ch=0,history=[],demo=true,analyser=null,data=null,audio=null,stream=null,last=0,acc=0,simTime=0,hideTimer=null;
 const PERIOD=64,MINHZ=40,MAXHZ=12000;
+const SETTINGS_KEY='matrix-spectrum-studio-v4-settings';
+const DEFAULT_SETTINGS={
+ matrix:{sensitivity:100,grouping:100,response:100},
+ flow:{amplitude:100,width:165,grouping:50,attack:65,decay:230,bands:24,glow:100},
+ color:'#36f58a'
+};
+const SETTING_FIELDS={
+ matrix:[
+  ['sensitivity','Чувствительность',50,160,5,'%','Усиливает или ослабляет реакцию цифр на звук. 100% — исходная Матрица.'],
+  ['grouping','Группировка частот',0,200,5,'%','Насколько сильно соседние частотные столбцы смешиваются. 100% — исходная Матрица.'],
+  ['response','Скорость реакции',50,160,5,'%','Скорость появления и затухания цифр. 100% — исходная Матрица.']
+ ],
+ flow:[
+  ['amplitude','Амплитуда',35,240,5,'%','Высота изгибов относительно текущей версии.'],
+  ['width','Ширина изгиба',60,350,5,'%','Ширина одной локальной деформации; не срезает её вершину.'],
+  ['grouping','Объединение пиков',0,100,5,'%','Насколько активно убираются близкие, более слабые максимумы.'],
+  ['attack','Реакция на звук',25,250,5,' мс','Время реакции на появление звука. Меньше — резче.'],
+  ['decay','Затухание',80,800,10,' мс','Как быстро волна выпрямляется после звука.'],
+  ['bands','Частотные полосы',12,36,2,'','Детализация разделения низких, средних и высоких частот.'],
+  ['glow','Свечение',0,200,5,'%','Мягкий свет вокруг нитей; контуры остаются видимыми.']
+ ]
+};
+const cloneDefaults=()=>JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+function loadSettings(){
+ const d=cloneDefaults();try{
+  const saved=JSON.parse(localStorage.getItem(SETTINGS_KEY));
+  if(!saved||typeof saved!=='object')return d;
+  for(const mode of ['matrix','flow'])for(const [key,,min,max] of SETTING_FIELDS[mode]){
+   const v=saved[mode]?.[key];if(typeof v==='number'&&Number.isFinite(v))d[mode][key]=Math.max(min,Math.min(max,v));
+  }
+  if(typeof saved.color==='string'&&/^#[0-9a-f]{6}$/i.test(saved.color))d.color=saved.color;
+ }catch(e){}return d;
+}
+let settings=loadSettings();
+function saveSettings(){try{localStorage.setItem(SETTINGS_KEY,JSON.stringify(settings))}catch(e){}}
+const settingsOverlay=document.getElementById('settingsOverlay'),settingsBtn=document.getElementById('settingsBtn');
+const settingsFields=document.getElementById('modeSettings'),settingsTitle=document.getElementById('modeSettingsTitle');
+const colorPicker=document.getElementById('colorPicker');
+function colorHue(hex){const r=parseInt(hex.slice(1,3),16)/255,g=parseInt(hex.slice(3,5),16)/255,b=parseInt(hex.slice(5,7),16)/255;
+ const max=Math.max(r,g,b),min=Math.min(r,g,b),d=max-min;
+ if(d<.0001)return 137;
+ let h=max===r?((g-b)/d)%6:max===g?(b-r)/d+2:(r-g)/d+4;
+ return (h*60+360)%360;
+}
+const baseHue=colorHue(DEFAULT_SETTINGS.color);
+let hueOffset=0;
+function offsetHue(hex){if(hueOffset===0)return hex;
+ let r=parseInt(hex.slice(1,3),16)/255,g=parseInt(hex.slice(3,5),16)/255,b=parseInt(hex.slice(5,7),16)/255;
+ const max=Math.max(r,g,b),min=Math.min(r,g,b),diff=max-min,light=(max+min)/2;
+ if(diff===0)return hex;
+ const sat=diff/(1-Math.abs(2*light-1));let h=colorHue(hex)+hueOffset;h=((h%360)+360)%360;
+ return `hsl(${h.toFixed(2)} ${Math.round(sat*100)}% ${Math.round(light*100)}%)`;
+}
+function applyColor(){hueOffset=colorHue(settings.color)-baseHue;
+ // Keep exact original green palette when the default color is selected.
+ if(settings.color===DEFAULT_SETTINGS.color)hueOffset=0;
+ document.documentElement.style.setProperty('--ui-accent',offsetHue('#41e78d'));
+ colorPicker.value=settings.color;
+ flowGradient=null;flowGradientWidth=0;
+ if(C>0){makeGlyphs();glowDirty=true;}
+}
+function buildSettingsUI(){
+ const mode=viewMode?'flow':'matrix';settingsTitle.textContent=viewMode?'Spectral Flow — механика волн':'Матрица — механика цифр';
+ settingsFields.textContent='';
+ for(const [key,title,min,max,step,unit,hint] of SETTING_FIELDS[mode]){
+  const box=document.createElement('div');box.className='settingItem';
+  const label=document.createElement('label');label.className='settingTitle';
+  const labelText=document.createElement('span');labelText.textContent=title;
+  const value=document.createElement('output');value.textContent=settings[mode][key]+unit;
+  const range=document.createElement('input');range.type='range';range.min=min;range.max=max;range.step=step;range.value=settings[mode][key];
+  label.append(labelText,value);label.htmlFor='setting-'+mode+'-'+key;range.id=label.htmlFor;
+  range.addEventListener('input',()=>{const next=Number(range.value);const prev=settings[mode][key];settings[mode][key]=next;value.textContent=next+unit;
+   if(mode==='flow'&&key==='bands'&&next!==prev)resetFlowSpectrum();
+   saveSettings();
+  });
+  const tip=document.createElement('small');tip.textContent=hint;box.append(label,range,tip);settingsFields.appendChild(box);
+ }
+}
+function settingsOpen(){buildSettingsUI();colorPicker.value=settings.color;settingsOverlay.classList.add('open');document.body.classList.remove('hidden');clearTimeout(hideTimer);}
+function settingsClose(){settingsOverlay.classList.remove('open');showControls();}
+settingsBtn.onclick=settingsOpen;
+document.getElementById('settingsClose').onclick=settingsClose;
+document.getElementById('settingsDone').onclick=settingsClose;
+settingsOverlay.addEventListener('click',e=>{if(e.target===settingsOverlay)settingsClose()});
+document.getElementById('settingsReset').onclick=()=>{
+ const mode=viewMode?'flow':'matrix';settings[mode]={...DEFAULT_SETTINGS[mode]};if(mode==='flow')resetFlowSpectrum();buildSettingsUI();saveSettings();
+};
+colorPicker.addEventListener('input',()=>{settings.color=colorPicker.value;applyColor();saveSettings()});
+
 let viewMode=0,flowLast=0,flowAccumulator=0,flowTime=0;
 let flowGradient=null,flowGradientWidth=0;
 let prevLevels=new Float32Array(0),floorLevels=new Float32Array(0),glyphs=[];
@@ -63,16 +166,16 @@ function makeGlyphs(){
   g.font=`${font}px monospace`;g.textAlign='center';g.textBaseline='middle';
   const light=v===0?18:Math.min(75,24+v*5.3);
   const saturation=v===0?38:Math.min(83,60+v*2);
-  const ink=`hsl(${137-v*.5} ${saturation}% ${light}%)`;
+  const ink=`hsl(${137-v*.5+hueOffset} ${saturation}% ${light}%)`;
   if(v>0){
-   g.shadowColor=`hsla(136,95%,58%,${(.10+v*.045).toFixed(3)})`;
+   g.shadowColor=`hsla(${136+hueOffset},95%,58%,${(.10+v*.045).toFixed(3)})`;
    g.shadowBlur=(.5+v*.30)*Math.min(1,cw/14);
   }
   g.fillStyle=ink;g.fillText(String(v),cw/2,ch/2);
   glyphs.push(tile);
  }
 }
-function showControls(){document.body.classList.remove('hidden');clearTimeout(hideTimer);hideTimer=setTimeout(()=>document.body.classList.add('hidden'),6500)}
+function showControls(){document.body.classList.remove('hidden');clearTimeout(hideTimer);if(!settingsOverlay.classList.contains('open'))hideTimer=setTimeout(()=>document.body.classList.add('hidden'),6500)}
 c.addEventListener('click',showControls);
 function resize(){if(calibration){calibration=null;status.textContent="Калибровка прервана изменением размера экрана";updateNoiseButtons()}flowGradient=null;W=innerWidth;H=innerHeight;const d=Math.min(devicePixelRatio||1,1.5);c.width=Math.round(W*d);c.height=Math.round(H*d);ctx.setTransform(d,0,0,d,0,0);cw=Math.max(9,Math.min(18,Math.round(W/88)));ch=Math.round(cw*1.36);const old=history,oldC=C;C=Math.ceil(W/cw);R=Math.ceil(H/ch)+2;history=old.slice(0,R).map(row=>Array.from({length:C},(_,i)=>row[Math.min(oldC-1,Math.floor(i*oldC/C))]||0));while(history.length<R)history.push(new Uint8Array(C));prevLevels=new Float32Array(C);floorLevels=new Float32Array(C);rawLevels=new Float32Array(C);blendedLevels=new Float32Array(C);makeGlyphs();glowCanvas.width=C;glowCanvas.height=R;glowImage=glowCtx.createImageData(C,R);glowPixels=glowImage.data;glowDirty=true;ctx.font=`${Math.round(cw*.91)}px monospace`;ctx.textAlign='center';ctx.textBaseline='middle'}
 addEventListener('resize',resize);resize();
@@ -106,7 +209,7 @@ function sample(){const row=new Uint8Array(C);
    const blend=Math.min(1,Math.max(0,(q-.20)/.18));
    const smoothstep=blend*blend*(3-2*blend);
    const boost=1.42+(1.15-1.42)*smoothstep;
-   rawLevels[x]=Math.max(0,Math.min(1,transient*boost));
+   rawLevels[x]=Math.max(0,Math.min(1,transient*boost*settings.matrix.sensitivity/100));
   }
   // Frequency cohesion: a gentle Gaussian blend joins adjacent peaks without
   // flattening the true peak or smearing unrelated sounds across the screen.
@@ -126,12 +229,14 @@ function sample(){const row=new Uint8Array(C);
     sum+=rawLevels[xx]*w;weightSum+=w;
    }
    const neighborMean=sum/weightSum;
-   const mix=.56+(.36-.56)*t;
+   const mix=Math.min(.95,(.56+(.36-.56)*t)*settings.matrix.grouping/100);
    blendedLevels[x]=rawLevels[x]*(1-mix)+neighborMean*mix;
   }
   for(let x=0;x<C;x++){
    const target=blendedLevels[x];
-   const smooth=prevLevels[x]=target>prevLevels[x]?target*.68+prevLevels[x]*.32:target*.28+prevLevels[x]*.72;
+   const speed=settings.matrix.response/100;
+   const rise=1-Math.pow(1-.68,speed),fall=1-Math.pow(1-.28,speed);
+   const smooth=prevLevels[x]=target>prevLevels[x]?target*rise+prevLevels[x]*(1-rise):target*fall+prevLevels[x]*(1-fall);
    row[x]=Math.min(9,Math.round(Math.pow(smooth,1.03)*10));
   }
   if(calibration){
@@ -144,11 +249,18 @@ function sample(){const row=new Uint8Array(C);
  if(!demo)return row;
  simTime+=PERIOD/1000;const beat=Math.pow(Math.max(0,Math.sin(simTime*5.1)),14),hat=Math.pow(Math.max(0,Math.sin(simTime*10.2+1)),18);
  for(let x=0;x<C;x++){const q=x/C;const bass=beat*9*Math.exp(-Math.pow((q-.13)/.065,2)),mid=(1+1.4*Math.sin(simTime*2+q*22))*Math.exp(-Math.pow((q-.48)/.13,2)),high=hat*9*Math.exp(-Math.pow((q-.82)/.065,2));row[x]=Math.max(0,Math.min(9,Math.round(bass+mid+high+(Math.random()-.5)*.3)))}return row}
+function glowRgb(){
+ if(hueOffset===0)return [18,185,75];
+ const hue=((140+hueOffset)%360+360)%360,s=.823,v=.725;
+ const chroma=v*s,h=hue/60,x=chroma*(1-Math.abs(h%2-1));
+ let z=h<1?[chroma,x,0]:h<2?[x,chroma,0]:h<3?[0,chroma,x]:h<4?[0,x,chroma]:h<5?[x,0,chroma]:[chroma,0,x];
+ const m=v-chroma;return z.map(q=>Math.round((q+m)*255));
+}
 function drawGlow(){
  // Smooth 2D convolution across neighbouring columns AND rows. Rendering the
  // tiny light field stretched with browser interpolation avoids costly blur
  // filters and keeps the edges soft, with no square cell boundaries.
- const weights=[.09,.23,.36,.23,.09];
+ const weights=[.09,.23,.36,.23,.09],lightRgb=glowRgb();
  for(let y=0;y<R;y++)for(let x=0;x<C;x++){
   let energy=0;
   for(let dy=-2;dy<=2;dy++){
@@ -163,7 +275,7 @@ function drawGlow(){
   }
   const idx=(y*C+x)*4;
   const a=Math.min(90,Math.round(energy*255*GLOW_STRENGTH));
-  glowPixels[idx]=18;glowPixels[idx+1]=185;glowPixels[idx+2]=75;glowPixels[idx+3]=a;
+  glowPixels[idx]=lightRgb[0];glowPixels[idx+1]=lightRgb[1];glowPixels[idx+2]=lightRgb[2];glowPixels[idx+3]=a;
  }
  glowCtx.putImageData(glowImage,0,0);
 }
@@ -182,140 +294,184 @@ function draw(){ctx.fillStyle='#000000';ctx.fillRect(0,0,W,H);
  ctx.globalAlpha=1;
 }
 
-// Liquid Ribbons v2: ONLY this renderer is changed. Matrix v9.2 stays intact.
-// One coherent, smooth displacement field for all 11 filaments.
-const FLOW_BANDS=18,FLOW_LINES=11,FLOW_SAMPLE_MS=40;
-const flowTarget=new Float32Array(FLOW_BANDS),flowLevel=new Float32Array(FLOW_BANDS);
-const flowCurve=new Float32Array(128),flowSmooth=new Float32Array(128);
-const FLOW_POINTS=128;
+// Spectral Flow v3 — localized signed spectral waves. Matrix is unchanged.
+// Source-informed design: nonoverlapping logarithmic max bands (PSCactux bins.ts),
+// per-band attack/release memory (IUSV), optional onset from positive spectral
+// flux (PSCactux onset.ts). Geometry is original, NOT copied from these projects.
+let FLOW_BANDS=24;const FLOW_MAX_BANDS=36,FLOW_LINES=11,FLOW_SAMPLE_MS=40,FLOW_POINTS=144;
+const flowTarget=new Float32Array(FLOW_MAX_BANDS),flowLevel=new Float32Array(FLOW_MAX_BANDS);
+const flowPrevious=new Float32Array(FLOW_MAX_BANDS),flowPeaks=new Float32Array(FLOW_MAX_BANDS);
 const flowY=new Float32Array(FLOW_POINTS),flowEnergy=new Float32Array(FLOW_POINTS);
+const flowBandStarts=new Int32Array(FLOW_MAX_BANDS),flowBandEnds=new Int32Array(FLOW_MAX_BANDS);
+const flowPhase=new Float32Array(FLOW_MAX_BANDS);
+let flowBandRate=0,flowBandFft=0,flowPulse=0,flowLastOnset=-100;
+const flowFluxHistory=[];
+function resetFlowSpectrum(){
+ FLOW_BANDS=settings.flow.bands;
+ flowBandRate=0;flowBandFft=0;
+ flowTarget.fill(0);flowLevel.fill(0);flowPrevious.fill(0);flowPeaks.fill(0);flowFluxHistory.length=0;flowPulse=0;
+}
+function flowBuildBands(){
+ if(!analyser||!audio)return;
+ const hz=audio.sampleRate/analyser.fftSize;
+ const fmin=Math.max(MINHZ,hz),fmax=Math.min(MAXHZ,audio.sampleRate*.47);
+ const ratio=fmax/fmin;
+ let start=Math.max(1,Math.floor(fmin/hz));
+ for(let i=0;i<FLOW_BANDS;i++){
+  const edge=fmin*Math.pow(ratio,(i+1)/FLOW_BANDS);
+  const maxEnd=data.length-(FLOW_BANDS-i-1);
+  const end=Math.min(maxEnd,Math.max(start+1,Math.round(edge/hz)));
+  flowBandStarts[i]=start;flowBandEnds[i]=end;start=end;
+ }
+ flowBandRate=audio.sampleRate;flowBandFft=analyser.fftSize;
+}
 function flowSpectrum(){
  if(analyser&&!demo){
+  if(flowBandRate!==audio.sampleRate||flowBandFft!==analyser.fftSize||FLOW_BANDS!==settings.flow.bands){FLOW_BANDS=settings.flow.bands;flowBuildBands()}
   analyser.getFloatFrequencyData(data);
-  const binHz=audio.sampleRate/analyser.fftSize;
-  const max=Math.min(MAXHZ,audio.sampleRate*.47);
   for(let i=0;i<FLOW_BANDS;i++){
-   const lo=MINHZ*Math.pow(max/MINHZ,i/FLOW_BANDS),hi=MINHZ*Math.pow(max/MINHZ,(i+1)/FLOW_BANDS);
-   const a=Math.max(1,Math.ceil(lo/binHz)),b=Math.min(data.length-1,Math.ceil(hi/binHz)-1);
    let peak=-120;
-   if(a<=b){for(let k=a;k<=b;k++)peak=Math.max(peak,data[k])}
-   else peak=data[Math.min(data.length-1,Math.max(1,Math.round(Math.sqrt(lo*hi)/binHz)))];
+   for(let k=flowBandStarts[i];k<flowBandEnds[i];k++)peak=Math.max(peak,data[k]);
+   // Map calibrated Matrix noise profile on the same logarithmic frequency axis.
    let level=Math.max(0,Math.min(1,(peak+83)/59));
    if(noiseProfile&&!calibration){
     const f=(i+.5)*noiseProfile.db.length/FLOW_BANDS-.5;
-    const a0=Math.max(0,Math.min(noiseProfile.db.length-1,Math.floor(f)));
-    const b0=Math.min(noiseProfile.db.length-1,a0+1),t0=Math.max(0,Math.min(1,f-a0));
-    const noise=noiseProfile.db[a0]*(1-t0)+noiseProfile.db[b0]*t0;
-    const t=Math.max(0,Math.min(1,(peak-noise-NOISE_LOW_DB)/(NOISE_HIGH_DB-NOISE_LOW_DB)));
-    level*=t*t*(3-2*t);
+    const a=Math.max(0,Math.min(noiseProfile.db.length-1,Math.floor(f)));
+    const b=Math.min(noiseProfile.db.length-1,a+1),t=Math.max(0,Math.min(1,f-a));
+    const floor=noiseProfile.db[a]*(1-t)+noiseProfile.db[b]*t;
+    const gate=Math.max(0,Math.min(1,(peak-floor-NOISE_LOW_DB)/(NOISE_HIGH_DB-NOISE_LOW_DB)));
+    level*=gate*gate*(3-2*gate);
    }
-   // A real quiet room or calibrated silence yields a straight ribbon.
-   flowTarget[i]=Math.pow(Math.max(0,(level-.09)/.91),1.03);
+   flowTarget[i]=Math.pow(Math.max(0,(level-.085)/.915),1.0);
   }
  }else if(demo){
   const beat=Math.pow(Math.max(0,Math.sin(flowTime*4.4)),10);
   const hat=Math.pow(Math.max(0,Math.sin(flowTime*9.2+1)),14);
   for(let i=0;i<FLOW_BANDS;i++){
    const q=(i+.5)/FLOW_BANDS;
-   const bass=beat*.98*Math.exp(-Math.pow((q-.15)/.11,2));
-   const mid=(.30+.22*Math.sin(flowTime*1.8))*Math.exp(-Math.pow((q-.50)/.15,2));
-   const high=hat*.65*Math.exp(-Math.pow((q-.82)/.10,2));
-   flowTarget[i]=Math.max(0,Math.min(1,bass+mid+high));
+   flowTarget[i]=Math.min(1,beat*.94*Math.exp(-Math.pow((q-.15)/.07,2))+
+    (.26+.22*Math.sin(flowTime*1.8))*Math.exp(-Math.pow((q-.52)/.085,2))+
+    hat*.67*Math.exp(-Math.pow((q-.82)/.065,2)));
   }
  }else flowTarget.fill(0);
+ // Lightweight spectral-flux onset detector: same documented principle as
+ // PSCactux, but using our existing 24 bands and NO extra FFT analyser.
+ let flux=0;
+ for(let i=0;i<FLOW_BANDS;i++){
+  flux+=Math.max(0,flowTarget[i]-flowPrevious[i]);
+  flowPrevious[i]=flowTarget[i];
+ }
+ flux/=FLOW_BANDS;
+ if(flowFluxHistory.length>=8){
+  const sorted=flowFluxHistory.slice().sort((a,b)=>a-b);
+  const median=sorted[Math.floor(sorted.length/2)];
+  const dev=flowFluxHistory.map(v=>Math.abs(v-median)).sort((a,b)=>a-b);
+  const mad=dev[Math.floor(dev.length/2)];
+  if(flux>Math.max(.018,median*1.5+mad*3)&&flowTime-flowLastOnset>.12){
+   flowPulse=Math.min(1,flowPulse+.72);flowLastOnset=flowTime;
+  }
+ }
+ flowFluxHistory.push(flux);if(flowFluxHistory.length>43)flowFluxHistory.shift();
 }
 function flowUpdate(dt){
- const up=1-Math.exp(-dt/.075),down=1-Math.exp(-dt/.23);
+ const up=1-Math.exp(-dt/(settings.flow.attack/1000)),down=1-Math.exp(-dt/(settings.flow.decay/1000));
  for(let i=0;i<FLOW_BANDS;i++){
   const t=flowTarget[i],v=flowLevel[i];
   flowLevel[i]=v+(t-v)*(t>v?up:down);
  }
+ flowPulse*=Math.exp(-dt/(settings.flow.decay/1000));
 }
 function flowBuildCurve(){
- // A broad Gaussian kernel removes column-shaped response. Its support is
- // ~5 bands (instead of many narrow, independent wiggles).
- for(let i=0;i<FLOW_POINTS;i++){
-  const f=i*(FLOW_BANDS-1)/(FLOW_POINTS-1);
-  let sum=0,wsum=0;
-  for(let k=Math.max(0,Math.floor(f)-5);k<=Math.min(FLOW_BANDS-1,Math.ceil(f)+5);k++){
-   const z=(k-f)/1.75,w=Math.exp(-.5*z*z);
-   sum+=flowLevel[k]*w;wsum+=w;
-  }
-  flowCurve[i]=wsum?sum/wsum:0;
+ // Detect dominant regions, then spatially spread each as a POSITIVE Gaussian.
+ // No oscillating spatial carrier: a single pure tone cannot mechanically
+ // produce two neighboring negative side-lobes.
+ flowPeaks.fill(0);
+ for(let i=0;i<FLOW_BANDS;i++){
+  const v=flowLevel[i];
+  const left=i?flowLevel[i-1]:0,right=i+1<FLOW_BANDS?flowLevel[i+1]:0;
+  if(v<.045||v<left||v<right)continue;
+  const prominence=v-Math.min(left,right);
+  if(prominence<.008&&v<.18)continue;
+  flowPeaks[i]=v;
  }
- // Suppress shallow secondary humps without destroying independent strong
- // instruments: a wide maximum envelope gently merges close responses.
- for(let i=0;i<FLOW_POINTS;i++){
-  let localMax=0;
-  for(let j=-9;j<=9;j+=3){
-   const k=Math.max(0,Math.min(FLOW_POINTS-1,i+j));
-   if(flowCurve[k]>localMax)localMax=flowCurve[k];
+ // Suppress close weaker maxima, preserving two clearly separated tones.
+ for(let i=0;i<FLOW_BANDS;i++)if(flowPeaks[i]){
+  for(let j=Math.max(0,i-Math.round(settings.flow.grouping/25));j<=Math.min(FLOW_BANDS-1,i+Math.round(settings.flow.grouping/25));j++){
+   if(i!==j&&flowPeaks[j]>flowPeaks[i]){flowPeaks[i]=0;break}
   }
-  flowSmooth[i]=.73*flowCurve[i]+.27*localMax;
+ }
+ const sigma=settings.flow.width/100;
+ for(let p=0;p<FLOW_POINTS;p++){
+  const x=p*(FLOW_BANDS-1)/(FLOW_POINTS-1);
+  let y=0,e=0;
+  for(let i=0;i<FLOW_BANDS;i++){
+   const level=flowPeaks[i];if(level<=0)continue;
+   const d=(x-i)/sigma;if(Math.abs(d)>4)continue;
+   const weight=Math.exp(-.5*d*d);
+   // Each active spectral region has ONE time-varying signed displacement.
+   // Adjacent pixels share its sign; no forced negative troughs around a peak.
+   const phase=flowTime*(1.25+.52*i/FLOW_BANDS)+i*.43;
+   const signed=Math.sin(phase);
+   y+=level*weight*signed;
+   e+=level*weight;
+  }
+  flowY[p]=Math.tanh(y*.95);
+  flowEnergy[p]=Math.min(1,e);
  }
 }
+// Shape-preserving piecewise cubic Hermite interpolation (PCHIP-style).
+// Zero derivative at local extrema prevents polygonal corners and overshoot.
+// Uses flowY values; frequency peaks stay at their measured heights.
+function curveValueAt(f){
+ const i=Math.max(0,Math.min(FLOW_POINTS-2,Math.floor(f))),t=Math.min(1,Math.max(0,f-i));
+ const y0=flowY[i],y1=flowY[i+1],delta=y1-y0;
+ const prev=i?y0-flowY[i-1]:delta,next=i+2<FLOW_POINTS?flowY[i+2]-y1:delta;
+ function derivative(a,b){return a*b<=0?0:2*a*b/(a+b)}
+ const m0=derivative(prev,delta),m1=derivative(delta,next);
+ const t2=t*t,t3=t2*t;
+ return (2*t3-3*t2+1)*y0+(t3-2*t2+t)*m0+(-2*t3+3*t2)*y1+(t3-t2)*m1;
+}
+function curveEnergyAt(f){const i=Math.max(0,Math.min(FLOW_POINTS-2,Math.floor(f))),t=Math.max(0,Math.min(1,f-i));return flowEnergy[i]*(1-t)+flowEnergy[i+1]*t;}
 function drawFlow(){
  ctx.fillStyle='#000000';ctx.fillRect(0,0,W,H);
  flowBuildCurve();
  if(!flowGradient||flowGradientWidth!==W){
   flowGradient=ctx.createLinearGradient(0,0,W,0);
-  flowGradient.addColorStop(0,'#159754');
-  flowGradient.addColorStop(.38,'#3ce58a');
-  flowGradient.addColorStop(.7,'#79ffb4');
-  flowGradient.addColorStop(1,'#b0ffe0');
+  flowGradient.addColorStop(0,offsetHue('#159754'));flowGradient.addColorStop(.38,offsetHue('#3ce58a'));
+  flowGradient.addColorStop(.7,offsetHue('#79ffb4'));flowGradient.addColorStop(1,offsetHue('#b0ffe0'));
   flowGradientWidth=W;
  }
- const amp=Math.min(H*.34,W*.235); // ~2x v1 amplitude
- const spacing=Math.min(8.5,Math.max(3.8,H*.0075));
- let mean=0;
- // One common wave: big, slow low-frequency bends; tighter high-frequency
- // ripples. No per-line phases, so the threads read as one liquid ribbon.
- for(let i=0;i<FLOW_POINTS;i++){
-  const q=i/(FLOW_POINTS-1),e=flowSmooth[i];
-  flowEnergy[i]=e;mean+=e;
-  const phase=flowTime*(1.35+q*.65);
-  const bass=Math.sin(q*8.2-phase)*.90;
-  const mid=Math.sin(q*16.5+phase*.85)*.27;
-  const high=Math.sin(q*30.0-phase*1.25)*.075;
-  // Envelope vanishes in silence; frequency-specific motion stays localized.
-  flowY[i]=amp*e*(bass+mid+high);
- }
- mean/=FLOW_POINTS;
- const left=-18,right=W+18,step=Math.max(6,Math.min(12,Math.round(W/120)));
- const center=H*.51;
+ const amp=Math.min(H*.31,W*.22)*settings.flow.amplitude/100,spacing=Math.min(8.5,Math.max(3.8,H*.0075));
+ const center=H*.51,left=-6,right=W+6,step=3;
+ let mean=0;for(let i=0;i<FLOW_POINTS;i++)mean+=flowEnergy[i];mean/=FLOW_POINTS;
  ctx.lineCap='round';ctx.lineJoin='round';
- // One soft, broad ambient halo, drawn only twice (not 11 blurry strokes).
  function ribbonPath(offset,scale){
-  ctx.beginPath();
-  let first=true;
+  ctx.beginPath();let first=true;
   for(let x=left;x<=right+step;x+=step){
    const q=Math.max(0,Math.min(1,x/W)),f=q*(FLOW_POINTS-1);
-   const k=Math.floor(f),j=Math.min(FLOW_POINTS-1,k+1),t=f-k;
-   const bend=flowY[k]*(1-t)+flowY[j]*t;
-   const energy=flowEnergy[k]*(1-t)+flowEnergy[j]*t;
-   // Small differential breathing is shared, not a separate waveform.
-   const breathing=energy*amp*.018*Math.sin(q*10.5+flowTime*1.1)*offset/5;
-   const y=center+offset*spacing+bend*scale+breathing;
+   const bend=curveValueAt(f);
+   const energy=curveEnergyAt(f);
+   // Small coherent fiber separation, NOT another traveling sine wave.
+   const offsetFactor=1+energy*.055;
+   const y=center+offset*spacing*offsetFactor+bend*amp*scale*(1+flowPulse*.17);
    if(first){ctx.moveTo(x,y);first=false}else ctx.lineTo(x,y);
   }
  }
- ribbonPath(0,1);ctx.strokeStyle='#1bdc7a';ctx.globalAlpha=.095+Math.min(.10,mean*.26);ctx.lineWidth=35;ctx.stroke();
- ribbonPath(0,1);ctx.strokeStyle='#37f99b';ctx.globalAlpha=.10+Math.min(.10,mean*.3);ctx.lineWidth=17;ctx.stroke();
- // Cohesive fine filaments with near-identical trajectories and tight spacing.
+ ribbonPath(0,1);ctx.strokeStyle=offsetHue('#1bdc7a');ctx.globalAlpha=(.095+Math.min(.10,mean*.26))*settings.flow.glow/100;ctx.lineWidth=35;ctx.stroke();
+ ribbonPath(0,1);ctx.strokeStyle=offsetHue('#37f99b');ctx.globalAlpha=(.10+Math.min(.10,mean*.3))*settings.flow.glow/100;ctx.lineWidth=17;ctx.stroke();
  for(let line=0;line<FLOW_LINES;line++){
   const u=(line-(FLOW_LINES-1)/2)/((FLOW_LINES-1)/2);
   ribbonPath(u*5,1-u*u*.075);
-  ctx.strokeStyle=flowGradient;
-  ctx.globalAlpha=(line===5?.91:.47)+Math.min(.13,mean*.32);
-  ctx.lineWidth=line===5?1.8:1.0;
-  ctx.stroke();
+  ctx.strokeStyle=flowGradient;ctx.globalAlpha=(line===5?.91:.47)+Math.min(.13,mean*.32);
+  ctx.lineWidth=line===5?1.8:1.0;ctx.stroke();
  }
  ctx.globalAlpha=1;
 }
 function setMode(next){
  viewMode=next;modeBtn.textContent=viewMode?'◈ Режим: Spectral Flow':'◈ Режим: Матрица';
- flowLast=0;flowAccumulator=0;flowTime=0;flowTarget.fill(0);flowLevel.fill(0);
+ flowLast=0;flowAccumulator=0;flowTime=0;flowTarget.fill(0);flowLevel.fill(0);flowPrevious.fill(0);flowPulse=0;flowFluxHistory.length=0;flowBandRate=0;
  if(!viewMode){last=0;acc=0;glowDirty=true}
+ if(settingsOverlay.classList.contains('open'))buildSettingsUI();
  showControls();
 }
 modeBtn.onclick=()=>setMode(viewMode?0:1);
@@ -370,6 +526,7 @@ resetBtn.onclick=()=>{
  updateNoiseButtons();showControls();
 };
 updateNoiseButtons();
+resetFlowSpectrum();applyColor();
 full.onclick=async()=>{try{if(!document.fullscreenElement){if(document.documentElement.requestFullscreen)await document.documentElement.requestFullscreen();else throw Error('В этом браузере полноэкранный режим недоступен')}else await document.exitFullscreen()}catch(e){status.textContent=e.message+' — попробуй «Добавить на главный экран».'}showControls()};
 if('serviceWorker' in navigator&&location.protocol==='https:')navigator.serviceWorker.register('./sw.js').catch(()=>{});
 showControls();
